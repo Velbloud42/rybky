@@ -175,16 +175,16 @@ private fun squareFrame(frame: Bitmap, rotation: Int): Bitmap {
     )
 }
 
-/** Fotka z galerie jako čtverec ze středu, zmenšená – stejný tvar, jaký dává kamera. */
-fun loadPhoto(context: Context, uri: Uri): Bitmap {
-    val bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
+/** Fotka z galerie v původním poměru stran, zmenšená a otočená podle EXIF. */
+fun loadFullPhoto(context: Context, uri: Uri): Bitmap =
+    ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, info, _ ->
         decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE // MediaPipe potřebuje čitelné pixely
         val longest = maxOf(info.size.width, info.size.height)
         if (longest > 1600) decoder.setTargetSampleSize(longest / 1600)
     }
-    val side = minOf(bitmap.width, bitmap.height)
-    return Bitmap.createBitmap(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side)
-}
+
+/** Fotka z galerie jako čtverec ze středu, zmenšená – stejný tvar, jaký dává kamera. */
+fun loadPhoto(context: Context, uri: Uri): Bitmap = centerCrop(loadFullPhoto(context, uri))
 
 /**
  * Výchozí vzory rybky pro galerii na serveru: obrázek ryby v různých barvách (samolepka na papíře,

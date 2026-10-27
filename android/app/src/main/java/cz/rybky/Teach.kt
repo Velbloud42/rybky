@@ -1,6 +1,25 @@
 package cz.rybky
 
 import android.graphics.Bitmap
+import kotlin.math.sin
+import kotlin.math.cos
+import kotlin.math.abs
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.calculateRotation
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.Canvas
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -8,6 +27,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +48,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddLocationAlt
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Crop
+import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.RotateRight
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Place
@@ -42,10 +66,13 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -53,8 +80,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +107,85 @@ private class Shot(
 )
 
 /**
+ * Úprava fotky z galerie: fotka jde posunout, přiblížit a otočit, výběrový čtverec posunout a zvětšit.
+ * Souřadnice jsou v pixelech plochy editoru ([area]); fotka je v ní vycentrovaná jako ContentScale.Fit.
+ */
+private class PhotoEdit(val photo: Bitmap) {
+    var scale by mutableFloatStateOf(1f)
+    var rotation by mutableFloatStateOf(0f)
+    var offset by mutableStateOf(Offset.Zero)
+    var area by mutableStateOf(IntSize.Zero)
+    var center by mutableStateOf(Offset.Zero) // střed výběru
+    var side by mutableFloatStateOf(0f)       // strana výběru
+
+    fun place(size: IntSize) {
+        if (size == area && side > 0f) return
+        area = size
+        side = minOf(size.width, size.height) * 0.8f
+        center = Offset(size.width / 2f, size.height / 2f)
+    }
+
+    fun reset() { scale = 1f; rotation = 0f; offset = Offset.Zero; side = 0f; place(area) }
+
+    /** Dvěma prsty: přiblížení a otočení kolem bodu mezi prsty, k tomu posun. */
+    fun transform(centroid: Offset, pan: Offset, zoom: Float, degrees: Float) {
+        val newScale = (scale * zoom).coerceIn(0.3f, 10f)
+        val mid = Offset(area.width / 2f, area.height / 2f)
+        val rad = Math.toRadians(degrees.toDouble())
+        val v = (mid + offset - centroid) * (newScale / scale)
+        val turned = Offset(
+            (v.x * cos(rad) - v.y * sin(rad)).toFloat(),
+            (v.x * sin(rad) + v.y * cos(rad)).toFloat(),
+        )
+        scale = newScale
+        rotation += degrees
+        offset = centroid + turned - mid + pan
+    }
+
+    fun inSquare(p: Offset) = abs(p.x - center.x) <= side / 2 && abs(p.y - center.y) <= side / 2
+
+    /** Roh výběru pod prstem jako znaménka (±1, ±1), nebo null. */
+    fun cornerAt(p: Offset, reach: Float): Offset? =
+        listOf(Offset(-1f, -1f), Offset(1f, -1f), Offset(-1f, 1f), Offset(1f, 1f))
+            .firstOrNull { (center + it * (side / 2) - p).getDistance() <= reach }
+
+    fun moveSquare(pan: Offset) { center = clamp(center + pan, side) }
+
+    /** Tažení rohu: protější roh zůstane na místě. */
+    fun resize(corner: Offset, p: Offset, minSide: Float) {
+        val fixed = center - Offset(corner.x * side / 2, corner.y * side / 2)
+        val limit = minOf(area.width, area.height).toFloat()
+        val newSide = maxOf((p.x - fixed.x) * corner.x, (p.y - fixed.y) * corner.y).coerceIn(minSide, limit)
+        side = newSide
+        center = clamp(fixed + Offset(corner.x * newSide / 2, corner.y * newSide / 2), newSide)
+    }
+
+    private fun clamp(c: Offset, s: Float) = Offset(
+        c.x.coerceIn(s / 2, area.width - s / 2), c.y.coerceIn(s / 2, area.height - s / 2),
+    )
+
+    /** Čtverec přesně tak, jak je vidět ve výběru (výsledek má [out] px). */
+    fun render(out: Int = 1024): Bitmap {
+        val base = minOf(area.width.toFloat() / photo.width, area.height.toFloat() / photo.height)
+        val k = out / side
+        val matrix = Matrix().apply {
+            postTranslate(-photo.width / 2f, -photo.height / 2f)
+            postScale(base * scale, base * scale)
+            postRotate(rotation)
+            postTranslate(area.width / 2f + offset.x, area.height / 2f + offset.y)
+            postTranslate(-(center.x - side / 2), -(center.y - side / 2))
+            postScale(k, k)
+        }
+        return Bitmap.createBitmap(out, out, Bitmap.Config.ARGB_8888).also {
+            Canvas(it).apply {
+                drawColor(android.graphics.Color.BLACK)
+                drawBitmap(photo, matrix, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+            }
+        }
+    }
+}
+
+/**
  * Nalepení: kamera přes celou obrazovku, po vyfocení vyjede panel s názvem, prostředím a polohou.
  * Místo focení jde vybrat fotku z galerie a souřadnice napsat ručně.
  */
@@ -85,6 +196,8 @@ fun TeachScreen(api: Api, embedder: Embedder) {
     val snapshot = remember { CameraSnapshot() }
     val latest = remember { AtomicReference<List<FloatArray>?>(null) }
     var shot by remember { mutableStateOf<Shot?>(null) }
+    var edit by remember { mutableStateOf<PhotoEdit?>(null) }
+    var editing by remember { mutableStateOf(false) }
     var done by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val form = remember { StickerForm() }
@@ -92,15 +205,12 @@ fun TeachScreen(api: Api, embedder: Embedder) {
     var score by remember { mutableStateOf<Pair<Float, Boolean>?>(null) }
     LaunchedEffect(Unit) { runCatching { loadRybka(api) }.onSuccess { rybka = it } }
 
+    // Fotka z galerie se nejdřív otevře v editoru, kde jde přiblížit, otočit a posunout.
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) scope.launch {
-            runCatching {
-                withContext(Dispatchers.Default) {
-                    val photo = loadPhoto(context, uri)
-                    val crops = embedder.embedCrops(photo)
-                    Shot(photo, crops, true, rybka?.check(crops))
-                }
-            }.onSuccess { shot = it }.onFailure { error = "Fotku se nepodařilo načíst" }
+            runCatching { withContext(Dispatchers.Default) { loadFullPhoto(context, uri) } }
+                .onSuccess { edit = PhotoEdit(it); editing = true; shot = null }
+                .onFailure { error = "Fotku se nepodařilo načíst" }
         }
     }
 
@@ -131,6 +241,27 @@ fun TeachScreen(api: Api, embedder: Embedder) {
             Spacer(Modifier.height(24.dp))
             Button(onClick = { form.clear(); shot = null; done = null }) { Text("Nalepit další") }
         }
+        return
+    }
+
+    val e = edit
+    if (editing && e != null) {
+        PhotoEditor(
+            e,
+            onCancel = { editing = false; if (shot == null) edit = null },
+            onDone = {
+                scope.launch {
+                    runCatching {
+                        withContext(Dispatchers.Default) {
+                            val photo = e.render()
+                            val crops = embedder.embedCrops(photo)
+                            Shot(photo, crops, true, rybka?.check(crops))
+                        }
+                    }.onSuccess { shot = it }.onFailure { error = "Fotku se nepodařilo upravit" }
+                    editing = false
+                }
+            },
+        )
         return
     }
 
@@ -183,7 +314,12 @@ fun TeachScreen(api: Api, embedder: Embedder) {
             }
         } else {
             Image(s.image.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            StickerSheet(api, s, form, rybka, onRetake = { shot = null }, onDone = { done = it })
+            StickerSheet(
+                api, s, form, rybka,
+                onRetake = { shot = null; edit = null },
+                onEdit = if (s.fromGallery && e != null) ({ editing = true }) else null,
+                onDone = { done = it; edit = null },
+            )
         }
     }
 }
@@ -200,7 +336,8 @@ private class StickerForm {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun StickerSheet(
-    api: Api, shot: Shot, form: StickerForm, rybka: Rybka?, onRetake: () -> Unit, onDone: (JSONObject) -> Unit,
+    api: Api, shot: Shot, form: StickerForm, rybka: Rybka?, onRetake: () -> Unit, onEdit: (() -> Unit)?,
+    onDone: (JSONObject) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -232,9 +369,21 @@ private fun StickerSheet(
             )
             if (!recognized) Text(
                 "Na fotce nevidím rybku z Rybek" + (shot.rybka?.let { " (shoda ${(it.first * 100).toInt()} %)" } ?: "") +
-                    ". Vyfoť ji zblízka.",
+                    if (onEdit != null) ". Přibliž ji ve výřezu." else ". Vyfoť ji zblízka.",
                 color = MaterialTheme.colorScheme.error,
             )
+            if (onEdit != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    shot.image.asImageBitmap(), null,
+                    Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop,
+                )
+                Spacer(Modifier.width(12.dp))
+                TextButton(onClick = onEdit) {
+                    Icon(Icons.Outlined.Crop, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Upravit výřez")
+                }
+            }
             Text("Kde samolepka visí?", fontWeight = FontWeight.Bold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 envs.forEach { e ->
@@ -318,6 +467,114 @@ private fun StickerSheet(
                     Text(if (busy) "Ukládám…" else "Nalepit")
                 }
             }
+        }
+    }
+}
+
+private enum class Drag { Photo, Square, Corner }
+
+/**
+ * Editor fotky z galerie. Jedním prstem se posouvá výběrový čtverec (za rohy se zvětšuje) nebo fotka,
+ * dvěma prsty se fotka přibližuje a otáčí. Použije se, co je ve čtverci; slabší rámeček uvnitř ukazuje,
+ * kam patří samotná rybka – stejně jako zaměřovací čtverec u focení.
+ */
+@Composable
+private fun PhotoEditor(edit: PhotoEdit, onCancel: () -> Unit, onDone: () -> Unit) {
+    var busy by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        Box(
+            Modifier.fillMaxSize().clipToBounds()
+                .onSizeChanged { edit.place(it) }
+                .pointerInput(edit) {
+                    val reach = 36.dp.toPx()
+                    val minSide = 96.dp.toPx()
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val corner = edit.cornerAt(down.position, reach)
+                        var drag = when {
+                            corner != null -> Drag.Corner
+                            edit.inSquare(down.position) -> Drag.Square
+                            else -> Drag.Photo
+                        }
+                        do {
+                            val event = awaitPointerEvent()
+                            if (event.changes.count { it.pressed } >= 2) drag = Drag.Photo // dvěma prsty vždy fotka
+                            when (drag) {
+                                Drag.Photo -> edit.transform(
+                                    event.calculateCentroid(useCurrent = false), event.calculatePan(),
+                                    event.calculateZoom(), event.calculateRotation(),
+                                )
+                                Drag.Square -> edit.moveSquare(event.calculatePan())
+                                Drag.Corner -> event.changes.firstOrNull { it.id == down.id }
+                                    ?.let { edit.resize(corner!!, it.position, minSide) }
+                            }
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        } while (event.changes.any { it.pressed })
+                    }
+                },
+        ) {
+            Image(
+                edit.photo.asImageBitmap(), null,
+                Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = edit.scale; scaleY = edit.scale; rotationZ = edit.rotation
+                    translationX = edit.offset.x; translationY = edit.offset.y
+                },
+                contentScale = ContentScale.Fit,
+            )
+            SelectionOverlay(edit)
+        }
+        Text(
+            "Čtverec posuň prstem a za rohy zvětši. Fotku dvěma prsty přibliž a otoč. " +
+                "Rybka patří do vnitřního rámečku, kolem ní kousek okolí.",
+            color = Color.White, textAlign = TextAlign.Center, fontSize = 14.sp,
+            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(16.dp)
+                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+        )
+        Row(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val round = Modifier.size(52.dp).background(Color.Black.copy(alpha = 0.6f), CircleShape)
+            IconButton(onClick = onCancel, modifier = round) { Icon(Icons.Outlined.Close, "Zpět", tint = Color.White) }
+            IconButton(onClick = { edit.rotation += 90f }, modifier = round) {
+                Icon(Icons.Outlined.RotateRight, "Otočit o 90°", tint = Color.White)
+            }
+            IconButton(onClick = { edit.reset() }, modifier = round) {
+                Icon(Icons.Outlined.RestartAlt, "Vrátit na začátek", tint = Color.White)
+            }
+            Button(
+                onClick = { busy = true; onDone() },
+                enabled = edit.side > 0f && !busy,
+                modifier = Modifier.weight(1f).height(52.dp),
+            ) { Text(if (busy) "Chvilku…" else "Hotovo") }
+        }
+    }
+}
+
+/** Ztmavení mimo výběr, rámeček výběru s úchyty v rozích a vodítko pro rybku uprostřed. */
+@Composable
+private fun SelectionOverlay(edit: PhotoEdit) {
+    Canvas(Modifier.fillMaxSize()) {
+        val half = edit.side / 2
+        val tl = edit.center - Offset(half, half)
+        val shade = Color.Black.copy(alpha = 0.6f)
+        drawRect(shade, Offset.Zero, Size(size.width, tl.y))
+        drawRect(shade, Offset(0f, tl.y + edit.side), Size(size.width, size.height - tl.y - edit.side))
+        drawRect(shade, Offset(0f, tl.y), Size(tl.x, edit.side))
+        drawRect(shade, Offset(tl.x + edit.side, tl.y), Size(size.width - tl.x - edit.side, edit.side))
+        drawRect(Amber, tl, Size(edit.side, edit.side), style = Stroke(3.dp.toPx()))
+        val aim = edit.side * AIM_FRACTION
+        drawRoundRect(
+            Color.White.copy(alpha = 0.7f), edit.center - Offset(aim / 2, aim / 2), Size(aim, aim),
+            CornerRadius(16.dp.toPx()),
+            style = Stroke(1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 12f))),
+        )
+        listOf(Offset(-1f, -1f), Offset(1f, -1f), Offset(-1f, 1f), Offset(1f, 1f)).forEach {
+            val c = edit.center + Offset(it.x * half, it.y * half)
+            drawCircle(Color.White, 10.dp.toPx(), c)
+            drawCircle(Amber, 10.dp.toPx(), c, style = Stroke(3.dp.toPx()))
         }
     }
 }
