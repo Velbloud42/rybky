@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rybky – lov samolepek po městě</title>
+<meta name="description" content="Po městě visí samolepky s rybkami. Najdi je, namiř na ně telefon a ulov je do svého akvária.">
+<meta property="og:title" content="Rybky – lov samolepek po městě">
+<meta property="og:description" content="Najdi samolepky s rybkami, ulov je telefonem a sbírej body. Hra pro Android.">
+<meta property="og:image" content="https://rybky.pravn.uk/intro/icon.png">
+<meta property="og:url" content="https://rybky.pravn.uk/intro">
+<meta name="theme-color" content="#0a1220">
+<link rel="icon" href="/intro/icon.png">
+<link rel="apple-touch-icon" href="/intro/icon.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&icon_names=add_location_alt,android,brush,download,emoji_events,leaderboard,local_cafe,location_on,map,military_tech,phishing,phone_iphone,photo_camera,set_meal,workspace_premium&display=block">
+<style>
+  /* Barvy z aplikace (Theme.kt): světlý i tmavý režim podle systému, jako v telefonu. */
+  :root {
+    --bg: #f6f9fb; --surface-low: #eff5f8; --surface: #e7f0f4; --surface-high: #dde9ef;
+    --text: #0f172a; --muted: #5b6b7a; --line: #d3e1e8;
+    --primary: #0e7490; --on-primary: #ffffff; --primary-container: #cffafe; --on-primary-container: #083344;
+    --amber: #fbbf24; --fish-green: #18450b;
+    --common: #94a3b8; --uncommon: #22c55e; --rare: #3b82f6; --legendary: #fbbf24;
+    --rarity-text-legendary: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a1220; --surface-low: #0f1a2b; --surface: #132136; --surface-high: #1a2b44;
+      --text: #e6edf5; --muted: #8fa3b8; --line: #22344d;
+      --primary: #67e8f9; --on-primary: #083344; --primary-container: #155e75; --on-primary-container: #cffafe;
+      --rarity-text-legendary: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { color: var(--primary); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  .icon { font-family: "Material Symbols Outlined"; font-weight: normal; font-style: normal; font-size: 24px; line-height: 1;
+          letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; direction: ltr;
+          -webkit-font-feature-settings: "liga"; font-feature-settings: "liga"; user-select: none; }
+  .muted { color: var(--muted); }
+  section { padding: 56px 0; }
+  h2 { font-size: clamp(26px, 4vw, 34px); line-height: 1.15; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .lead { color: var(--muted); margin: 0 0 28px; max-width: 620px; }
+
+  /* --- záhlaví ----------------------------------------------------------- */
+  header.top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent);
+               backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  header.top .wrap { display: flex; align-items: center; gap: 12px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 19px; color: var(--text); text-decoration: none; }
+  .brand img { width: 34px; height: 34px; }
+  header.top nav { margin-left: auto; display: flex; gap: 4px; }
+  header.top nav a { color: var(--muted); text-decoration: none; padding: 8px 12px; border-radius: 99px; font-size: 15px; }
+  header.top nav a:hover { color: var(--text); background: var(--surface); }
+  @media (max-width: 640px) { header.top nav a:not(.cta) { display: none; } }
+
+  .button { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; background: var(--primary); color: var(--on-primary);
+            text-decoration: none; font-weight: 700; padding: 15px 26px; border-radius: 99px; font-size: 17px;
+            box-shadow: 0 6px 24px color-mix(in srgb, var(--primary) 30%, transparent); transition: transform .15s; }
+  .button:hover { transform: translateY(-1px); }
+  .button.small { padding: 8px 16px; font-size: 15px; box-shadow: none; }
+  header.top nav a.cta { color: var(--on-primary); background: var(--primary); font-weight: 700; }
+
+  /* --- úvod ------------------------------------------------------------- */
+  .hero { padding: 48px 0 40px; }
+  .hero .wrap { display: grid; grid-template-columns: 1.1fr .9fr; gap: 40px; align-items: center; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 6px; color: var(--primary); font-weight: 700; font-size: 14px;
+             background: var(--surface); padding: 6px 12px 6px 8px; border-radius: 99px; }
+  .eyebrow .icon { font-size: 20px; }
+  .hero h1 { font-size: clamp(44px, 8vw, 76px); line-height: 1; margin: 18px 0 12px; letter-spacing: -0.03em; }
+  .hero h1 span { color: var(--primary); }
+  .hero p.pitch { font-size: 19px; color: var(--muted); max-width: 520px; margin: 0 0 28px; }
+  .download-meta { margin-top: 12px; color: var(--muted); font-size: 14px; }
+  .stats { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 8px 22px; color: var(--muted); font-size: 15px; }
+  .stats span { display: inline-flex; align-items: baseline; gap: 6px; }
+  .stats strong { color: var(--text); font-size: 18px; }
+
+  /* Maketa obrazovky Lov z aplikace. */
+  .phone-stage { position: relative; display: flex; justify-content: center; }
+  .phone { width: 290px; aspect-ratio: 9 / 19; border-radius: 42px; padding: 10px; background: #05080f;
+           box-shadow: 0 30px 60px rgba(2, 8, 20, .35), inset 0 0 0 2px #1f2937; }
+  .screen { position: relative; height: 100%; border-radius: 33px; overflow: hidden;
+            background: radial-gradient(120% 80% at 30% 20%, #9aa3ab 0%, #6b747c 45%, #3f464d 100%); }
+  .screen::before { content: ""; position: absolute; inset: 0;
+                    background: repeating-linear-gradient(100deg, rgba(255,255,255,.04) 0 2px, transparent 2px 7px); }
+  .sticker { position: absolute; left: 50%; top: 31%; transform: translate(-50%, -50%) rotate(-6deg); width: 46%; aspect-ratio: 1.35;
+             border-radius: 50%; background: #10151b; display: grid; place-items: center; box-shadow: 0 3px 8px rgba(0,0,0,.35); }
+  .sticker img { width: 78%; }
+  .aim { position: absolute; left: 50%; top: 31%; transform: translate(-50%, -50%); width: 65%; aspect-ratio: 1;
+         border: 3px solid var(--amber); border-radius: 22px; }
+  .hunt-panel { position: absolute; left: 10px; right: 10px; bottom: 66px; background: #1a2b44; color: #e6edf5;
+                border-radius: 20px; padding: 13px 14px; font-size: 12px; box-shadow: 0 6px 16px rgba(0,0,0,.3); }
+  .hunt-panel b { font-size: 13.5px; display: block; }
+  .hunt-panel .dim { color: #8fa3b8; }
+  .bar { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-weight: 700; font-size: 13px; }
+  .bar i { flex: 1; height: 7px; border-radius: 9px; background: #155e75; position: relative; overflow: hidden; }
+  .bar i::after { content: ""; position: absolute; inset: 0 18% 0 0; background: var(--amber); border-radius: 9px; }
+  .navbar { position: absolute; left: 0; right: 0; bottom: 0; height: 58px; background: #132136; display: grid;
+            grid-template-columns: repeat(5, 1fr); align-items: center; text-align: center; color: #8fa3b8; font-size: 9.5px; }
+  .navbar .icon { font-size: 20px; display: block; margin: 0 auto 2px; width: 44px; padding: 3px 0; border-radius: 99px; }
+  .navbar .on { color: #e6edf5; }
+  .navbar .on .icon { background: #155e75; color: #cffafe; }
+  /* Karta „Úlovek!“ jako v aplikaci po ulovení. */
+  .reveal { position: absolute; right: -6px; top: 24%; width: 186px; background: var(--surface-high); color: var(--text);
+            border-radius: 22px; padding: 14px; text-align: center; box-shadow: 0 16px 40px rgba(2, 8, 20, .35);
+            border: 1px solid var(--line); transform: rotate(3deg); }
+  .reveal .title { color: var(--amber); font-weight: 800; font-size: 13px; }
+  .reveal .fish { width: 54px; height: 54px; border-radius: 50%; margin: 6px auto; display: grid; place-items: center;
+                  background: color-mix(in srgb, var(--rare) 20%, transparent); color: var(--rare); }
+  .reveal .fish .icon { font-size: 32px; }
+  .reveal .name { font-weight: 800; font-size: 17px; line-height: 1.2; }
+  .reveal .pill { margin: 6px 0; }
+  .reveal .points { color: var(--primary); font-weight: 800; font-size: 22px; }
+  @media (max-width: 860px) {
+    .hero .wrap { grid-template-columns: 1fr; }
+    .phone-stage { margin-top: 10px; }
+    .reveal { right: calc(50% - 230px); }
+  }
+  @media (max-width: 480px) {
+    .phone { width: 250px; }
+    .reveal { right: 0; top: 4%; width: 150px; padding: 10px; }
+    .reveal .fish { width: 44px; height: 44px; } .reveal .name { font-size: 15px; } .reveal .points { font-size: 19px; }
+    .download .button { padding: 14px 20px; font-size: 16px; }
+  }
+
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+          padding: 3px 11px; border-radius: 99px; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); }
+  .reveal .pill { --c: var(--rare); }
+
+  /* --- karty ------------------------------------------------------------ */
+  .grid { display: grid; gap: 14px; }
+  .grid.four { grid-template-columns: repeat(4, 1fr); }
+  .grid.three { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 900px) { .grid.four { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 640px) { .grid.four, .grid.three { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border-radius: 24px; padding: 22px; }
+  .card h3 { margin: 14px 0 6px; font-size: 19px; }
+  .card p { margin: 0; color: var(--muted); }
+  .badge { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center;
+           background: var(--primary-container); color: var(--on-primary-container); }
+  .step { position: relative; }
+  .step .num { position: absolute; top: 18px; right: 20px; font-size: 40px; font-weight: 800; color: var(--surface-high); line-height: 1; }
+
+  .rarities { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 760px) { .rarities { grid-template-columns: repeat(2, 1fr); } }
+  .rarity { background: var(--surface); border-radius: 24px; padding: 20px; display: grid; gap: 8px; justify-items: start;
+            border: 2px solid color-mix(in srgb, var(--c) 35%, transparent); }
+  .rarity strong { font-size: 34px; line-height: 1; }
+  .rarity .muted { font-size: 14px; }
+  .rarity.common { --c: var(--common); } .rarity.uncommon { --c: var(--uncommon); }
+  .rarity.rare { --c: var(--rare); } .rarity.legendary { --c: var(--legendary); }
+  .rarity.legendary .pill { color: var(--rarity-text-legendary); }
+  .facts { margin-top: 14px; }
+  .fact { display: flex; gap: 14px; align-items: flex-start; }
+  .fact .badge { flex: none; }
+  .fact p { margin: 2px 0 0; }
+
+  /* --- stažení ---------------------------------------------------------- */
+  .download { background: var(--surface); border-radius: 32px; padding: 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 36px; }
+  @media (max-width: 820px) { .download { grid-template-columns: 1fr; padding: 24px 20px; } }
+  .download h2 { display: flex; align-items: center; gap: 12px; }
+  .version { font-size: 15px; color: var(--muted); margin: 8px 0 22px; }
+  .download h3 { font-size: 16px; margin: 0 0 10px; }
+  .news { margin: 0; padding-left: 20px; color: var(--muted); }
+  .news li { margin-bottom: 8px; }
+  .news strong { color: var(--text); }
+  .news code { background: var(--surface-high); padding: 1px 6px; border-radius: 6px; font-size: .9em; }
+  ol.install { margin: 0; padding: 0; list-style: none; counter-reset: s; display: grid; gap: 12px; }
+  ol.install li { counter-increment: s; display: grid; grid-template-columns: 30px 1fr; gap: 12px; align-items: start; color: var(--muted); }
+  ol.install li::before { content: counter(s); width: 30px; height: 30px; border-radius: 50%; background: var(--primary); color: var(--on-primary);
+                          display: grid; place-items: center; font-weight: 800; font-size: 14px; }
+  ol.install b { color: var(--text); }
+  .note { margin-top: 20px; display: flex; gap: 10px; align-items: center; background: var(--surface-high); border-radius: 16px; padding: 12px 14px;
+          color: var(--muted); font-size: 14.5px; }
+
+  footer { padding: 36px 0 48px; color: var(--muted); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 24px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="/intro/icon.png" alt="">Rybky</a>
+    <nav>
+      <a href="#jak">Jak se hraje</a>
+      <a href="#body">Body</a>
+      <a class="cta" href="#stahnout">Stáhnout</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow"><span class="icon">android</span>Hra pro Android</span>
+        <h1>Lov <span>rybek</span><br>po městě</h1>
+        <p class="pitch">Po městě visí samolepky s rybkami. Najdi je, namiř na ně telefon a ulov je do svého akvária.
+          Nebo nalep vlastní a sbírej body za každého, kdo ji najde.</p>
+        <a class="button" href="/download"><span class="icon">download</span>Stáhnout pro Android</a>
+        <div class="download-meta">{{download_meta}} · zdarma</div>
+        <div class="stats">{{stats}}</div>
+      </div>
+      <div class="phone-stage" aria-hidden="true">
+        <div class="phone">
+          <div class="screen">
+            <div class="sticker"><img src="/intro/ryba.png" alt=""></div>
+            <div class="aim"></div>
+            <div class="hunt-panel">
+              <b>Zaměř samolepku do čtverce</b>
+              <span class="dim">K ulovení: 3 v okolí</span>
+              <div class="bar"><i></i>Shoda 82 %</div>
+            </div>
+            <div class="navbar">
+              <div class="on"><span class="icon">phishing</span>Lov</div>
+              <div><span class="icon">map</span>Mapa</div>
+              <div><span class="icon">leaderboard</span>Žebříček</div>
+              <div><span class="icon">set_meal</span>Akvárium</div>
+              <div><span class="icon">add_location_alt</span>Nalepit</div>
+            </div>
+          </div>
+        </div>
+        <div class="reveal">
+          <div class="title">Úlovek!</div>
+          <div class="fish"><span class="icon">set_meal</span></div>
+          <div class="name">Stříbrná Matylda</div>
+          <div class="muted" style="font-size:13px">Štika</div>
+          <span class="pill">vzácná</span>
+          <div class="points">+40 b.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="jak">
+    <div class="wrap">
+      <h2>Jak se hraje</h2>
+      <p class="lead">Rybky jsou honba za pokladem s telefonem v ruce. Stačí chodit s otevřenýma očima.</p>
+      <div class="grid four">
+        <div class="card step"><span class="num">1</span><div class="badge"><span class="icon">map</span></div>
+          <h3>Najdi</h3><p>Mapa ukáže kruh, ve kterém rybka visí. Kde přesně, musíš zjistit na místě.</p></div>
+        <div class="card step"><span class="num">2</span><div class="badge"><span class="icon">phishing</span></div>
+          <h3>Ulov</h3><p>Namiř kameru na samolepku. Rybky ji poznají podle obrázku i okolí a pošlou ji do tvého akvária.</p></div>
+        <div class="card step"><span class="num">3</span><div class="badge"><span class="icon">set_meal</span></div>
+          <h3>Sbírej</h3><p>Každá rybka má druh, vzácnost a své vlastní jméno. Ve hře je {{species}} druhů – doplň celý atlas.</p></div>
+        <div class="card step"><span class="num">4</span><div class="badge"><span class="icon">add_location_alt</span></div>
+          <h3>Nalep vlastní</h3><p>Nalep samolepku, vyfoť ji a pojmenuj. Pokaždé, když ji někdo uloví, dostaneš body.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Co se dá ulovit</h2>
+      <p class="lead">Rybky nejsou jen na zdech a sloupech.</p>
+      <div class="grid three">
+        <div class="card"><div class="badge"><span class="icon">location_on</span></div>
+          <h3>Samolepky</h3><p>Visí po městě, v parcích, u vody i na vyhlídkách. Ulovit je jde jen na místě, kde visí.</p></div>
+        <div class="card"><div class="badge"><span class="icon">brush</span></div>
+          <h3>Tetování</h3><p>Někteří hráči mají rybku vytetovanou. Když je potkáš, můžeš si ji ulovit – kdekoli.</p></div>
+        <div class="card"><div class="badge"><span class="icon">local_cafe</span></div>
+          <h3>Předměty</h3><p>Hrnky, lahve, trička nebo klíčenky s rybkou. Drobnost za {{object_points}} bodu.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="body">
+    <div class="wrap">
+      <h2>Vzácnost a body</h2>
+      <p class="lead">Jakou rybku samolepka skrývá, se ukáže až po nalepení. Čím vzácnější, tím víc bodů za úlovek.</p>
+      <div class="rarities">{{rarities}}</div>
+      <div class="grid three facts">
+        <div class="card fact"><div class="badge"><span class="icon">add_location_alt</span></div>
+          <div><b>+{{author_points}} b. autorovi</b><p>za každý úlovek jeho rybky</p></div></div>
+        <div class="card fact"><div class="badge"><span class="icon">military_tech</span></div>
+          <div><b>Úrovně</b><p>{{levels}}</p></div></div>
+        <div class="card fact"><div class="badge"><span class="icon">workspace_premium</span></div>
+          <div><b>{{achievements}} úspěchů</b><p>Ty vzácné jsou odznaky – tři si vystavíš vedle jména v žebříčku.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="stahnout">
+    <div class="wrap">
+      <div class="download">
+        <div>
+          <h2><img src="/intro/icon.png" alt="" width="44" height="44">Stáhni si Rybky</h2>
+          <div class="version">{{download_meta}}</div>
+          <a class="button" href="/download"><span class="icon">download</span>Stáhnout {{file}}</a>
+          <div class="note"><span class="icon">phone_iphone</span>Na iPhone Rybky zatím nejsou – jen pro Android.</div>
+          <h3 style="margin-top:28px">Co je nového</h3>
+          <ul class="news">{{notes}}</ul>
+        </div>
+        <div>
+          <h3>Instalace</h3>
+          <ol class="install">
+            <li><span><b>Stáhni soubor</b> tlačítkem vlevo. Odkaz <a href="/download">rybky.pravn.uk/download</a> vede vždycky na nejnovější verzi.</span></li>
+            <li><span><b>Otevři ho</b> ze stažených souborů. Telefon se zeptá, jestli smí prohlížeč instalovat aplikace – povol to.</span></li>
+            <li><span><b>Založ si účet</b> přezdívkou a heslem a povol kameru a polohu. Pak hurá na lov.</span></li>
+            <li><span><b>Nová verze?</b> Stáhni ji stejně a nainstaluj přes starou. Účet i rybky zůstanou.</span></li>
+          </ol>
+          <p class="muted" style="margin-top:22px;font-size:14.5px">Starší verze najdeš na <a href="{{releases_url}}">GitHubu</a>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Rybky · lov samolepek po městě</span>
+    <a href="{{releases_url}}">Všechny verze</a>
+  </div>
+</footer>
+</body>
+</html>

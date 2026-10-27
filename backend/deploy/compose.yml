@@ -1,5 +1,5 @@
 # Rybky backend na malině. Lokálně http://192.168.1.13:8090, zvenku přes Cloudflare tunel.
-# Vedle tohohle souboru musí ležet server.py, admin.py a admin.html.
+# Vedle tohohle souboru musí ležet server.py, admin.py, admin.html a složka web (úvodní stránka /intro).
 services:
   rybky:
     build: .
@@ -17,5 +17,6 @@ services:
       - ./server.py:/app/server.py:ro
       - ./admin.py:/app/admin.py:ro
       - ./admin.html:/app/admin.html:ro
+      - ./web:/app/web:ro
       - ./data:/data
     mem_limit: 192m

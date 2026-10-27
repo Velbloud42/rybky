@@ -9,6 +9,7 @@ Potřebuje balík `webauthn`; bez něj zbytek serveru funguje, jen admin hlásí
 """
 import base64
 import json
+import math
 import os
 import re
 import secrets
@@ -45,10 +46,10 @@ _setup = {"code": None, "failures": 0}
 _config = {}
 
 
-def configure(db, images_dir, catch_points, author_points, new_fish_name):
+def configure(db, images_dir, catch_points, author_points, new_fish_name, level_info):
     """Volá server při startu. Když ještě není žádný klíč, vygeneruje kód pro registraci prvního."""
     _config.update(db=db, images_dir=Path(images_dir), catch_points=catch_points, author_points=author_points,
-                   new_fish_name=new_fish_name)
+                   new_fish_name=new_fish_name, level_info=level_info)
     if webauthn is None:
         print("Admin: balík webauthn chybí, /admin nepoběží.")
         return
@@ -111,7 +112,7 @@ ROUTES = [
     ("POST", r"/admin/api/logout$", "logout"),
     ("GET", r"/admin/api/overview$", "overview"),
     ("POST", r"/admin/api/action$", "action"),
-    ("GET", r"/admin/image/(catch|sticker)/(\w+)$", "image"),
+    ("GET", r"/admin/image/(catch|sticker|avatar)/(\w+)$", "image"),
 ]
 
 
@@ -310,10 +311,15 @@ class AdminMixin:
                 "refsPositive": one("SELECT COUNT(*) FROM refs WHERE negative = 0"),
                 "refsNegative": one("SELECT COUNT(*) FROM refs WHERE negative = 1"),
             },
-            "users": q("""SELECT u.id, u.nick, u.points, u.password IS NOT NULL AS hasPassword, u.created,
-                                 (SELECT COUNT(*) FROM stickers s WHERE s.author_id = u.id) AS stickers,
-                                 (SELECT COUNT(*) FROM catches c WHERE c.finder_id = u.id AND c.accepted = 1) AS catches
-                          FROM users u ORDER BY u.points DESC, u.created"""),
+            "users": [{**u, "level": _config["level_info"](u["points"])} for u in q(
+                """SELECT u.id, u.nick, u.points, u.motto, u.avatar,
+                          u.password IS NOT NULL AS hasPassword, u.created,
+                          (SELECT COUNT(*) FROM stickers s WHERE s.author_id = u.id) AS stickers,
+                          (SELECT COUNT(*) FROM catches c WHERE c.finder_id = u.id AND c.accepted = 1) AS catches,
+                          (SELECT MAX(c.time) FROM catches c WHERE c.finder_id = u.id) AS lastSeen
+                   FROM users u ORDER BY u.points DESC, u.created""")],
+            "adjustments": q("""SELECT p.id, p.delta, p.reason, p.time, u.nick FROM point_adjustments p
+                                JOIN users u ON u.id = p.user_id ORDER BY p.time DESC LIMIT 200"""),
             "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created,
                                     s.image IS NOT NULL AS hasImage, a.nick AS author,
                                     (SELECT COUNT(*) FROM catches c WHERE c.sticker_id = s.id AND c.accepted = 1) AS finds,
@@ -321,7 +327,8 @@ class AdminMixin:
                                      WHERE c.sticker_id = s.id AND c.accepted = 1) AS finders
                              FROM stickers s JOIN users a ON a.id = s.author_id ORDER BY s.created DESC"""),
             "catches": q("""SELECT c.id, c.time, c.accepted, c.similarity, c.distance, c.points,
-                                   c.image IS NOT NULL AS hasImage, u.nick AS finder, s.name AS sticker, s.env, s.fish, s.fish_name,
+                                   c.image IS NOT NULL AS hasImage, u.nick AS finder, s.id AS stickerId, s.name AS sticker,
+                                   s.env, s.fish, s.fish_name, s.rarity,
                                    EXISTS(SELECT 1 FROM refs r WHERE r.origin = 'catch:' || c.id AND r.negative = 1) AS negative
                             FROM catches c JOIN users u ON u.id = c.finder_id JOIN stickers s ON s.id = c.sticker_id
                             ORDER BY c.time DESC LIMIT 200"""),
@@ -330,8 +337,8 @@ class AdminMixin:
 
     def _admin_image(self, kind, ident):
         self._require_session()
-        table = "catches" if kind == "catch" else "stickers"
-        row = self.conn.execute(f"SELECT image FROM {table} WHERE id = ?", (ident,)).fetchone()
+        column, table = {"catch": ("image", "catches"), "sticker": ("image", "stickers"), "avatar": ("avatar", "users")}[kind]
+        row = self.conn.execute(f"SELECT {column} AS image FROM {table} WHERE id = ?", (ident,)).fetchone()
         if not row or not row["image"]:
             raise AdminError(404, "Fotka není")
         return _Raw("image/jpeg", (_config["images_dir"] / row["image"]).read_bytes(), {"Cache-Control": "private, max-age=3600"})
@@ -365,6 +372,26 @@ class AdminMixin:
             if not position:
                 raise AdminError(400, "Nerozumím souřadnicím. Zkus třeba 50.0755, 14.4378")
             conn.execute("UPDATE stickers SET lat = ?, lon = ?, accuracy = 0 WHERE id = ?", (*position, ident))
+        elif action == "adjust_points":
+            # mode "add": přičíst (i záporně), "set": nastavit přesně. Každá úprava se zapíše i s důvodem.
+            user = conn.execute("SELECT points FROM users WHERE id = ?", (ident,)).fetchone()
+            if not user:
+                raise AdminError(404, "Hráč neexistuje")
+            try:
+                value = round(float(str(data.get("value")).replace(",", ".")), 1)
+            except ValueError:
+                raise AdminError(400, "Napiš počet bodů")
+            if not math.isfinite(value) or abs(value) > 100_000:
+                raise AdminError(400, "Tolik bodů ne")
+            delta = round(value - user["points"], 1) if data.get("mode") == "set" else value
+            if not delta:
+                raise AdminError(400, "Body by se nezměnily")
+            if user["points"] + delta < 0:
+                raise AdminError(400, "Body nemůžou jít do mínusu")
+            reason = " ".join(str(data.get("reason") or "").split())[:120] or None
+            conn.execute("UPDATE users SET points = points + ? WHERE id = ?", (delta, ident))
+            conn.execute("INSERT INTO point_adjustments (user_id, delta, reason, time) VALUES (?, ?, ?, ?)",
+                         (ident, delta, reason, time.time()))
         elif action == "rename_fish":
             # Prázdné jméno = vylosovat nové.
             if not conn.execute("SELECT 1 FROM stickers WHERE id = ?", (ident,)).fetchone():

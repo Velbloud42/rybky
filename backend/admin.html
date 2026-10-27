@@ -5,76 +5,217 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>Rybky admin</title>
+<link rel="icon" href="/intro/icon.png">
 <style>
+  /* Barvy z aplikace (Theme.kt), světlý i tmavý režim podle systému. */
   :root {
-    --bg: #f6f9fb; --panel: #ffffff; --panel-2: #eef4f7; --text: #0f172a; --muted: #5b6b7a;
-    --line: #dbe5ec; --accent: #0e7490; --accent-text: #ffffff; --danger: #b91c1c; --ok: #15803d; --amber: #b45309;
+    --bg: #f6f9fb; --surface: #e7f0f4; --surface-high: #dde9ef; --card: #ffffff;
+    --text: #0f172a; --muted: #5b6b7a; --line: #d3e1e8;
+    --primary: #0e7490; --on-primary: #ffffff; --primary-container: #cffafe; --on-primary-container: #083344;
+    --danger: #b91c1c; --ok: #15803d; --warn: #b45309; --amber: #fbbf24;
+    --r-common: #64748b; --r-uncommon: #16a34a; --r-rare: #2563eb; --r-legendary: #b45309;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0a1220; --panel: #111c2e; --panel-2: #17263c; --text: #e6edf5; --muted: #8fa3b8;
-      --line: #22344d; --accent: #67e8f9; --accent-text: #083344; --danger: #f87171; --ok: #4ade80; --amber: #fbbf24;
+      --bg: #0a1220; --surface: #132136; --surface-high: #1a2b44; --card: #0f1a2b;
+      --text: #e6edf5; --muted: #8fa3b8; --line: #22344d;
+      --primary: #67e8f9; --on-primary: #083344; --primary-container: #155e75; --on-primary-container: #cffafe;
+      --danger: #f87171; --ok: #4ade80; --warn: #fbbf24;
+      --r-common: #94a3b8; --r-uncommon: #22c55e; --r-rare: #60a5fa; --r-legendary: #fbbf24;
     }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1; }
-  header h1 { font-size: 18px; margin: 0; flex: 1; }
-  .logo { width: 30px; height: 30px; border-radius: 50%; background: #18450b; display: grid; place-items: center; color: #ebebeb; font-weight: 700; }
-  main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 60px; }
-  button { font: inherit; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 10px; padding: 7px 12px; cursor: pointer; }
-  button:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
-  button.danger { color: var(--danger); }
-  button:disabled { opacity: .5; cursor: default; }
-  input { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); width: 100%; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
-  .center { max-width: 420px; margin: 10vh auto; display: grid; gap: 14px; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--primary); }
   .muted { color: var(--muted); }
+  .small { font-size: 13px; }
+
+  header { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(8px);
+           border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1240px; margin: 0 auto; padding: 0 16px; display: flex; align-items: center; gap: 12px; height: 58px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; white-space: nowrap; }
+  .brand img { width: 32px; height: 32px; }
+  .bar .spacer { flex: 1; }
+  nav.tabs { max-width: 1240px; margin: 0 auto; padding: 0 12px; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  nav.tabs button { border: 0; background: none; color: var(--muted); padding: 10px 12px 12px; border-radius: 0; border-bottom: 3px solid transparent;
+                    font-weight: 600; white-space: nowrap; }
+  nav.tabs button.active { color: var(--primary); border-bottom-color: var(--primary); }
+  nav.tabs .count { font-size: 12px; background: var(--surface); color: var(--muted); border-radius: 99px; padding: 1px 7px; margin-left: 4px; }
+  main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 80px; }
+
+  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 99px;
+                 padding: 6px 14px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+  button:hover, .btn:hover { border-color: var(--primary); }
+  button.primary { background: var(--primary); color: var(--on-primary); border-color: transparent; font-weight: 700; }
+  button.danger { color: var(--danger); }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.ghost:hover { color: var(--text); background: var(--surface); }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select { font: inherit; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -1px; }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  .toolbar input[type=search] { flex: 1 1 220px; max-width: 360px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { border-radius: 99px; padding: 6px 12px; background: var(--surface); border: 1px solid transparent; color: var(--text); }
+  .chip.on { background: var(--primary-container); color: var(--on-primary-container); border-color: transparent; font-weight: 700; }
+
+  .card { background: var(--surface); border-radius: 20px; padding: 18px; }
+  .center { max-width: 420px; margin: 12vh auto; display: grid; gap: 14px; text-align: center; }
+  .center img { width: 72px; height: 72px; margin: 0 auto; }
   .error { color: var(--danger); min-height: 1.4em; }
-  nav.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
-  nav.tabs button.active { background: var(--accent); color: var(--accent-text); border-color: transparent; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
-  .stat .value { font-size: 28px; font-weight: 700; }
-  .stat .label { color: var(--muted); font-size: 13px; }
+  h2 { margin: 0 0 12px; font-size: 18px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .tile .value { font-size: 32px; font-weight: 800; line-height: 1.1; }
+  .tile .label { font-weight: 600; }
+  .cols { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+  .feed { display: grid; gap: 2px; }
+  .feed .row { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .feed .row:last-child { border-bottom: 0; }
+
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 0; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 99px;
+          color: var(--c, var(--muted)); background: color-mix(in srgb, var(--c, var(--muted)) 15%, transparent); white-space: nowrap; }
+  .pill.ok { --c: var(--ok); } .pill.bad { --c: var(--danger); } .pill.warn { --c: var(--warn); }
+  .pill.rarity { text-transform: uppercase; letter-spacing: .08em; }
+
+  .av { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex: none; display: inline-grid; place-items: center;
+        color: #fff; font-weight: 800; font-size: 18px; background: var(--surface-high); }
+  .av.sm { width: 28px; height: 28px; font-size: 13px; }
+
+  .players { display: grid; gap: 8px; }
+  .player { display: grid; grid-template-columns: 30px auto 1fr auto auto; gap: 12px; align-items: center; background: var(--surface);
+            border-radius: 18px; padding: 12px 16px; }
+  .player .rank { color: var(--muted); font-weight: 700; text-align: center; }
+  .player .nick { font-weight: 800; font-size: 16px; }
+  .player .points { text-align: right; }
+  .player .points b { font-size: 20px; display: block; }
+  .player .actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  @media (max-width: 760px) {
+    .player { grid-template-columns: auto 1fr auto; }
+    .player .rank { display: none; }
+    .player .actions { grid-column: 1 / -1; justify-content: flex-start; }
+  }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+  .fish { background: var(--surface); border-radius: 20px; overflow: hidden; display: flex; flex-direction: column; }
+  .fish.off { opacity: .7; }
+  .photo { position: relative; aspect-ratio: 4 / 3; background: var(--surface-high); display: grid; place-items: center; color: var(--muted); }
+  .photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .photo .pill { position: absolute; top: 10px; left: 10px; background: var(--card); }
+  .fish .body { padding: 14px 16px 16px; display: grid; gap: 6px; flex: 1; align-content: start; }
+  .fish h3 { margin: 0; font-size: 17px; }
+  .fish .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .fish .actions button { padding: 4px 12px; font-size: 14px; }
+  details.edit { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+  details.edit summary { cursor: pointer; color: var(--primary); font-weight: 600; list-style: none; }
+  details.edit summary::-webkit-details-marker { display: none; }
+  details.edit .row { margin-top: 8px; flex-wrap: nowrap; }
+  details.edit input { flex: 1; min-width: 0; }
+
+  .table { background: var(--surface); border-radius: 20px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
   th { color: var(--muted); font-weight: 600; font-size: 13px; }
-  .table-wrap { overflow-x: auto; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
-  .item img, .thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; background: var(--panel-2); display: block; }
-  .noimg { width: 100%; aspect-ratio: 1; border-radius: 12px; background: var(--panel-2); display: grid; place-items: center; color: var(--muted); font-size: 13px; }
-  .item { display: grid; gap: 8px; align-content: start; }
-  .item h3 { margin: 0; font-size: 16px; }
-  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--panel-2); color: var(--muted); }
-  .pill.ok { color: var(--ok); } .pill.bad { color: var(--danger); } .pill.warn { color: var(--amber); }
-  .small-thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; background: var(--panel-2); }
-  a { color: var(--accent); }
-  @media (max-width: 600px) { th:nth-child(n+5), td:nth-child(n+5) { display: none; } }
+  .thumb { width: 52px; height: 52px; object-fit: cover; border-radius: 10px; background: var(--surface-high); display: block; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .plus { color: var(--ok); font-weight: 700; } .minus { color: var(--danger); font-weight: 700; }
+  @media (max-width: 640px) { .hide-sm { display: none; } }
+  .empty { padding: 30px; text-align: center; color: var(--muted); }
+
+  dialog { border: 0; border-radius: 24px; padding: 22px; background: var(--card); color: var(--text); width: min(420px, calc(100vw - 32px));
+           box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+  dialog::backdrop { background: rgba(5, 10, 20, .55); }
+  dialog h2 { display: flex; align-items: center; gap: 10px; }
+  dialog form { display: grid; gap: 12px; }
+  dialog input { width: 100%; }
+  .preview { background: var(--surface); border-radius: 14px; padding: 10px 12px; }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+  #toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; transition: .2s; z-index: 20;
+           background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 99px; font-weight: 600; pointer-events: none; max-width: calc(100vw - 32px); }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #toast.error { background: var(--danger); color: #fff; }
 </style>
 </head>
 <body>
 <header>
-  <div class="logo">R</div>
-  <h1>Rybky admin</h1>
-  <button id="logout" hidden>Odhlásit</button>
+  <div class="bar">
+    <div class="brand"><img src="/intro/icon.png" alt="">Rybky admin</div>
+    <span class="spacer"></span>
+    <a class="btn" href="/intro" target="_blank" rel="noopener">Intro</a>
+    <button id="logout" class="ghost" hidden>Odhlásit</button>
+  </div>
+  <nav class="tabs" id="tabs" hidden></nav>
 </header>
 <main id="app"><p class="muted">Načítám…</p></main>
 
+<dialog id="pointsDlg">
+  <form method="dialog" id="pointsForm">
+    <h2 id="pointsTitle"></h2>
+    <div class="chips" id="pointsMode">
+      <button type="button" class="chip on" data-mode="add">Přičíst / ubrat</button>
+      <button type="button" class="chip" data-mode="set">Nastavit na</button>
+    </div>
+    <input id="pointsValue" type="number" step="0.5" inputmode="decimal" placeholder="např. 10 nebo -5" required>
+    <div class="chips" id="pointsQuick"></div>
+    <input id="pointsReason" maxlength="120" placeholder="Důvod (uvidíš ho v záložce Body)">
+    <div class="preview" id="pointsPreview"></div>
+    <div class="error" id="pointsErr"></div>
+    <div class="dlg-actions">
+      <button type="button" class="ghost" id="pointsCancel">Zrušit</button>
+      <button class="primary" id="pointsSave">Uložit</button>
+    </div>
+  </form>
+</dialog>
+<div id="toast"></div>
+
 <script>
 const app = document.getElementById('app');
+const tabsEl = document.getElementById('tabs');
 const logoutBtn = document.getElementById('logout');
 let data = null;
-let tab = 'prehled';
+// Záložka a filtry se pamatují v prohlížeči (když to jde).
+const state = Object.assign({tab: 'prehled', players: {q: ''}, fish: {status: 'all', kind: 'all', q: ''}, catches: {result: 'all', q: ''}},
+  (() => { try { return JSON.parse(localStorage.getItem('rybky-admin')) || {}; } catch { return {}; } })());
+const save = () => { try { localStorage.setItem('rybky-admin', JSON.stringify(state)); } catch {} };
 // Registrační kód jde předat v adrese (#code=…); hned se z ní smaže, ať nezůstane v historii.
 const setupCode = new URLSearchParams(location.hash.slice(1)).get('code') || '';
 if (location.hash) history.replaceState(null, '', location.pathname);
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-const when = t => t ? new Date(t * 1000).toLocaleString('cs-CZ', {dateStyle: 'short', timeStyle: 'short'}) : '';
+const when = t => t ? new Date(t * 1000).toLocaleString('cs-CZ', {day: 'numeric', month: 'numeric', year: '2-digit', hour: '2-digit', minute: '2-digit'}) : '';
+const ago = t => {
+  if (!t) return '';
+  const m = Math.round((Date.now() / 1000 - t) / 60);
+  if (m < 1) return 'teď'; if (m < 60) return `před ${m} min`;
+  const h = Math.round(m / 60); if (h < 24) return `před ${h} h`;
+  const d = Math.round(h / 24); return d < 30 ? `před ${d} d` : when(t);
+};
 const pts = p => (p ?? 0).toLocaleString('cs-CZ', {maximumFractionDigits: 1});
+const plural = (n, one, few, many) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ? few : many}`;
 const ENV = {voda: 'U vody', park: 'Park a příroda', mesto: 'Město', uvnitr: 'Vnitřní prostory', vrchol: 'Vrchol a výška', tetovani: 'Tetování', predmet: 'Předmět'};
+const PORTABLE = ['tetovani', 'predmet'];
+const kindOf = env => env === 'tetovani' ? 'tattoo' : env === 'predmet' ? 'object' : 'sticker';
+const RARITY = {'běžná': 'common', 'nevšední': 'uncommon', 'vzácná': 'rare', 'legendární': 'legendary'};
+const rarity = r => `<span class="pill rarity" style="--c: var(--r-${RARITY[r] || 'common'})">${esc(r)}</span>`;
+const AV_COLORS = ['#0f766e', '#4338ca', '#be123c', '#b45309', '#7e22ce', '#0369a1'];
+const hash = s => [...s.toLowerCase()].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0);
+const avatar = (u, cls = '') => u.avatar
+  ? `<img class="av ${cls}" src="/admin/image/avatar/${u.id}?v=${encodeURIComponent(u.avatar)}" alt="">`
+  : `<span class="av ${cls}" style="background:${AV_COLORS[((hash(u.nick) % 6) + 6) % 6]}">${esc(u.nick.slice(0, 1).toUpperCase())}</span>`;
+const userByNick = nick => data.users.find(u => u.nick === nick);
+
+let toastTimer;
+function toast(msg, error = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'show' + (error ? ' error' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = '', error ? 4000 : 2200);
+}
 
 async function api(path, body) {
   const res = await fetch('/admin/api/' + path, body === undefined ? {} : {
@@ -83,6 +224,14 @@ async function api(path, body) {
   const json = await res.json().catch(() => ({error: 'Chyba serveru'}));
   if (!res.ok) throw new Error(json.error || 'Chyba ' + res.status);
   return json;
+}
+
+/** Akce v adminu: potvrzení, provedení, obnovení dat a krátká zpráva. */
+async function act(payload, {confirmText, done, button} = {}) {
+  if (confirmText && !confirm(confirmText)) return false;
+  if (button) button.disabled = true;
+  try { await api('action', payload); await refresh(); if (done) toast(done); return true; }
+  catch (e) { toast(e.message, true); if (button) button.disabled = false; return false; }
 }
 
 // --- WebAuthn: převod mezi JSON (base64url) a ArrayBuffer -------------------
@@ -120,21 +269,22 @@ async function login() {
   await api('login/finish', {flow: begin.flow, credential: credentialJson(cred)});
 }
 
-// --- obrazovky -----------------------------------------------------------
-function loginScreen(state) {
-  logoutBtn.hidden = true;
-  if (!state.available) {
+// --- přihlášení ------------------------------------------------------------
+function loginScreen(s) {
+  logoutBtn.hidden = true; tabsEl.hidden = true;
+  if (!s.available) {
     app.innerHTML = `<div class="card center"><h2>Admin není dostupný</h2><p class="muted">Na serveru chybí balík webauthn.</p></div>`;
     return;
   }
-  if (!state.hasKeys) {
+  if (!s.hasKeys) {
     app.innerHTML = `<div class="card center">
+      <img src="/intro/icon.png" alt="">
       <h2 style="margin:0">Registrace klíče</h2>
       <p class="muted" style="margin:0">Zatím není zaregistrovaný žádný klíč. Kód najdeš v logu serveru
         (<code>docker logs rybky</code>).</p>
       <input id="code" placeholder="Registrační kód (XXXX-XXXX-XXXX)" autocomplete="off" value="${esc(setupCode)}">
       <input id="name" placeholder="Název klíče, např. YubiKey" value="Hlavní klíč">
-      <p class="muted" style="margin:0">Zasuň YubiKey, klikni na tlačítko a až začne blikat, dotkni se ho.
+      <p class="muted small" style="margin:0">Zasuň YubiKey, klikni na tlačítko a až začne blikat, dotkni se ho.
         Zaregistrovat jde jen jeden klíč – potom se registrace zavře.</p>
       <button class="primary" id="go">Zaregistrovat klíč</button>
       <div class="error" id="err"></div></div>`;
@@ -145,6 +295,7 @@ function loginScreen(state) {
     return;
   }
   app.innerHTML = `<div class="card center">
+    <img src="/intro/icon.png" alt="">
     <h2 style="margin:0">Přihlášení</h2>
     <p class="muted" style="margin:0">Zasuň hardwarový klíč a dotkni se ho.</p>
     <button class="primary" id="go">Přihlásit klíčem</button>
@@ -154,100 +305,291 @@ function loginScreen(state) {
   };
 }
 
-const TABS = [['prehled', 'Přehled'], ['hraci', 'Hráči'], ['samolepky', 'Samolepky'], ['ulovky', 'Úlovky'], ['klice', 'Klíče']];
+// --- záložky -----------------------------------------------------------------
+function tabs() {
+  return [
+    ['prehled', 'Přehled'],
+    ['hraci', 'Hráči', data.users.length],
+    ['rybky', 'Rybky', data.stickers.length],
+    ['ulovky', 'Úlovky', data.catches.filter(c => c.accepted).length],
+    ['body', 'Úpravy bodů', data.adjustments.length],
+    ['klic', 'Klíč'],
+  ];
+}
 
 function render() {
-  logoutBtn.hidden = false;
+  logoutBtn.hidden = false; tabsEl.hidden = false;
+  if (!tabs().some(([id]) => id === state.tab)) state.tab = 'prehled';
+  tabsEl.innerHTML = tabs().map(([id, label, n]) =>
+    `<button data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${label}${n != null ? `<span class="count">${n}</span>` : ''}</button>`).join('');
+  tabsEl.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { state.tab = b.dataset.tab; save(); render(); scrollTo(0, 0); });
+  ({prehled: overviewTab, hraci: playersTab, rybky: fishTab, ulovky: catchesTab, body: adjustmentsTab, klic: keyTab})[state.tab]();
+}
+
+/** Lišta s hledáním a filtry nad seznamem; při psaní se překreslí jen seznam, ať hledání neztratí fokus. */
+function withToolbar(toolbarHtml, bind, list) {
+  app.innerHTML = `<div class="toolbar">${toolbarHtml}</div><div id="list"></div>`;
+  const draw = () => { document.getElementById('list').innerHTML = list(); bindList(); };
+  bind(() => { save(); draw(); });
+  draw();
+}
+const searchBox = (value, placeholder) => `<input type="search" id="q" value="${esc(value)}" placeholder="${placeholder}">`;
+const chips = (name, options, current) => `<div class="chips" data-chips="${name}">${options.map(([v, l]) =>
+  `<button class="chip ${current === v ? 'on' : ''}" data-v="${v}">${l}</button>`).join('')}</div>`;
+function bindChips(name, onPick) {
+  const box = app.querySelector(`[data-chips="${name}"]`);
+  box.querySelectorAll('button').forEach(b => b.onclick = () => {
+    box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); onPick(b.dataset.v);
+  });
+}
+const matches = (q, ...fields) => !q || fields.some(f => String(f ?? '').toLowerCase().includes(q.toLowerCase()));
+
+// Přehled: čísla, poslední dění a co stojí za kontrolu.
+function overviewTab() {
   const s = data.stats;
-  const nav = `<nav class="tabs">${TABS.map(([id, label]) => `<button data-tab="${id}" class="${tab === id ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
-  let body = '';
-  if (tab === 'prehled') {
-    const tiles = [
-      [s.users, 'hráčů', `${s.usersWithPassword} s heslem`],
-      [s.stickers, 'samolepek na mapě'], [s.tattoos, 'tetování'], [s.objects, 'předmětů'],
-      [s.catches, 'úlovků', `${s.attempts} pokusů celkem`],
-      [s.refsPositive, 'vzorů „rybka“'], [s.refsNegative, 'vzorů „není rybka“'],
-    ];
-    body = `<div class="stats">${tiles.map(([v, l, sub]) => `<div class="card stat"><div class="value">${v}</div>
-      <div class="label">${l}${sub ? ` · ${sub}` : ''}</div></div>`).join('')}</div>`;
-  } else if (tab === 'hraci') {
-    body = `<div class="card table-wrap"><table><tr><th>Přezdívka</th><th>Body</th><th>Heslo</th><th></th><th>Samolepky</th><th>Úlovky</th><th>Od</th></tr>
-      ${data.users.map(u => `<tr><td><b>${esc(u.nick)}</b></td><td>${pts(u.points)}</td>
-        <td>${u.hasPassword ? '<span class="pill ok">nastavené</span>' : '<span class="pill warn">chybí</span>'}</td>
-        <td class="row">${u.hasPassword ? `<button data-act="reset_password" data-id="${u.id}" data-confirm="Hráč si nastaví nové heslo prvním přihlášením. Pokračovat?">Reset hesla</button>` : ''}
-          ${!u.stickers && !u.catches ? `<button class="danger" data-act="delete_user" data-id="${u.id}" data-confirm="Smazat prázdný účet ${esc(u.nick)}?">Smazat</button>` : ''}</td>
-        <td>${u.stickers}</td><td>${u.catches}</td><td class="muted">${when(u.created)}</td></tr>`).join('')}</table></div>`;
-  } else if (tab === 'samolepky') {
-    body = `<div class="grid">${data.stickers.map(st => `<div class="card item">
-      ${st.hasImage ? `<img loading="lazy" src="/admin/image/sticker/${st.id}" alt="">` : '<div class="noimg">bez fotky</div>'}
-      <h3>${esc(st.name || '(bez názvu)')}</h3>
-      <div class="row"><span class="pill">${ENV[st.env] || esc(st.env)}</span><span class="pill">${esc(st.fish_name || '')} · ${esc(st.fish)} · ${esc(st.rarity)}</span>
-        ${st.status === 'active' ? '<span class="pill ok">aktivní</span>' : '<span class="pill bad">vypnutá</span>'}</div>
-      <div class="muted">od ${esc(st.author)} · ${when(st.created)} · ulovena ${st.finds}×</div>
-      <div class="row"><input data-fish-name="${st.id}" value="${esc(st.fish_name || '')}" maxlength="40" placeholder="Jméno rybky" style="flex:1;min-width:0">
-        <button data-rename="${st.id}">Přejmenovat</button>
-        <button data-rename="${st.id}" data-random="1" title="Vylosovat nové náhodné jméno">Vylosovat</button></div>
-      ${st.hint ? `<div>„${esc(st.hint)}“</div>` : ''}
-      ${st.lat != null ? `<a target="_blank" rel="noopener" href="https://mapy.com/?q=${st.lat},${st.lon}">${st.lat.toFixed(5)}, ${st.lon.toFixed(5)}</a>
-        <div class="row"><input data-coords="${st.id}" value="${st.lat.toFixed(6)}, ${st.lon.toFixed(6)}" style="flex:1;min-width:0">
-          <button data-save-coords="${st.id}">Uložit polohu</button></div>` : ''}
-      ${st.finders ? `<div class="muted">Ulovili: ${esc(st.finders)}</div>` : ''}
-      <div class="row">${st.status === 'active'
-        ? `<button data-act="sticker_lost" data-id="${st.id}">Vypnout</button>
-           <button class="danger" data-act="sticker_not_rybka" data-id="${st.id}" data-confirm="Vypnout samolepku a její fotku zařadit mezi „není rybka“?">Není rybka</button>`
-        : `<button data-act="sticker_restore" data-id="${st.id}">Zapnout</button>`}
-        <button class="danger" data-act="sticker_delete" data-id="${st.id}" data-confirm="Smazat rybku ${esc(st.fish_name || st.name || st.id)} natrvalo? Zmizí i její úlovky z akvárií a lovci i autor přijdou o body za ni. Jen schovat ji jde tlačítkem Vypnout.">Smazat</button></div></div>`).join('') || '<p class="muted">Zatím nic.</p>'}</div>`;
-  } else if (tab === 'ulovky') {
-    body = `<div class="card table-wrap"><table><tr><th>Fotka</th><th>Kdo</th><th>Co</th><th>Výsledek</th><th>Shoda</th><th>Vzdálenost</th><th>Kdy</th><th></th></tr>
-      ${data.catches.map(c => `<tr>
-        <td>${c.hasImage ? `<a target="_blank" href="/admin/image/catch/${c.id}"><img class="small-thumb" loading="lazy" src="/admin/image/catch/${c.id}" alt=""></a>` : ''}</td>
-        <td>${esc(c.finder)}</td><td>${esc(c.sticker)} <span class="muted">· ${esc(c.fish_name || '')} (${esc(c.fish)})</span></td>
-        <td>${c.negative ? '<span class="pill bad">není rybka</span>' : c.accepted ? `<span class="pill ok">uloveno +${pts(c.points)}</span>` : '<span class="pill">nepřijato</span>'}</td>
-        <td>${c.similarity != null ? Math.round(c.similarity * 100) + ' %' : ''}</td>
-        <td>${c.distance != null ? Math.round(c.distance) + ' m' : '—'}</td>
-        <td class="muted">${when(c.time)}</td>
-        <td>${c.accepted && !c.negative ? `<button class="danger" data-act="catch_not_rybka" data-id="${c.id}" data-confirm="Vzít body za úlovek a fotku zařadit mezi „není rybka“?">Není rybka</button>` : ''}</td></tr>`).join('')}</table></div>`;
-  } else if (tab === 'klice') {
-    body = `<div class="card" style="display:grid;gap:12px">
-      <table><tr><th>Název</th><th>Přidán</th></tr>
-      ${data.keys.map(k => `<tr><td>${esc(k.name)}</td><td class="muted">${when(k.created)}</td></tr>`).join('')}</table>
-      <p class="muted" style="margin:0">Registrace je zavřená, další klíč přidat nejde. Když klíč ztratíš, je potřeba
-        na serveru smazat záznam v tabulce admin_keys a restartovat ho – v logu pak bude nový registrační kód.</p></div>`;
-  }
-  app.innerHTML = nav + body;
-  app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
-  app.querySelectorAll('[data-save-coords]').forEach(b => b.onclick = async () => {
-    const id = b.dataset.saveCoords;
-    const coords = app.querySelector(`[data-coords="${id}"]`).value;
-    b.disabled = true;
-    try { await api('action', {action: 'set_position', id, coords}); await refresh(); }
-    catch (e) { alert(e.message); b.disabled = false; }
-  });
-  app.querySelectorAll('[data-rename]').forEach(b => b.onclick = async () => {
-    const id = b.dataset.rename;
-    const name = b.dataset.random ? '' : app.querySelector(`[data-fish-name="${id}"]`).value.trim();
-    if (!b.dataset.random && !name) return alert('Napiš jméno, nebo dej Vylosovat.');
-    b.disabled = true;
-    try { await api('action', {action: 'rename_fish', id, name}); await refresh(); }
-    catch (e) { alert(e.message); b.disabled = false; }
-  });
-  app.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
-    if (b.dataset.confirm && !confirm(b.dataset.confirm)) return;
-    b.disabled = true;
-    try { await api('action', {action: b.dataset.act, id: b.dataset.id}); await refresh(); }
-    catch (e) { alert(e.message); b.disabled = false; }
+  const active = data.stickers.filter(x => x.status === 'active');
+  const accepted = data.catches.filter(c => c.accepted);
+  const rate = s.attempts ? Math.round(100 * s.catches / s.attempts) : 0;
+  const tiles = [
+    [s.users, 'hráčů', `${s.usersWithPassword} s heslem`],
+    [active.length, 'rybek ve hře', `${s.stickers} samolepek · ${s.tattoos} tetování · ${s.objects} předmětů`],
+    [s.catches, 'úlovků', `${s.attempts} pokusů · úspěšnost ${rate} %`],
+    [s.refsPositive, 'vzorů rybky', `${s.refsNegative} vzorů „není rybka“`],
+  ];
+  const events = [
+    ...accepted.map(c => ({t: c.time, html: `<b>${esc(c.finder)}</b> ulovil(a) <b>${esc(c.fish_name || c.fish)}</b> ${rarity(c.rarity)} <span class="muted">· „${esc(c.sticker)}“${c.points != null ? ` · +${pts(c.points)} b.` : ''}</span>`})),
+    ...data.stickers.map(x => ({t: x.created, html: `<b>${esc(x.author)}</b> přidal(a) <b>${esc(x.fish_name || x.fish)}</b> ${rarity(x.rarity)} <span class="muted">· ${esc(ENV[x.env] || x.env)} „${esc(x.name)}“</span>`})),
+    ...data.adjustments.map(a => ({t: a.time, html: `Body <b>${esc(a.nick)}</b>: <span class="${a.delta > 0 ? 'plus' : 'minus'}">${a.delta > 0 ? '+' : ''}${pts(a.delta)}</span> <span class="muted">${esc(a.reason || '')}</span>`})),
+  ].sort((a, b) => b.t - a.t).slice(0, 14);
+  const borderline = accepted.filter(c => c.similarity != null && c.similarity < 0.62 && !c.negative);
+  const noPassword = data.users.filter(u => !u.hasPassword);
+  const off = data.stickers.filter(x => x.status !== 'active');
+  const checks = [
+    borderline.length && [`${borderline.length} ${borderline.length === 1 ? 'úlovek prošel' : 'úlovků prošlo'} jen těsně (shoda pod 62 %)`, 'ulovky'],
+    noPassword.length && [`Bez hesla: ${noPassword.map(u => esc(u.nick)).join(', ')}`, 'hraci'],
+    off.length && [`${off.length} ${off.length === 1 ? 'rybka je vypnutá' : 'rybky jsou vypnuté'}`, 'rybky'],
+  ].filter(Boolean);
+  app.innerHTML = `
+    <div class="tiles">${tiles.map(([v, l, sub]) => `<div class="card tile"><div class="value">${v}</div>
+      <div class="label">${l}</div><div class="muted small">${sub}</div></div>`).join('')}</div>
+    <div class="cols">
+      <div class="card"><h2>Poslední dění</h2><div class="feed">${events.map(e =>
+        `<div class="row"><span class="grow">${e.html}</span><span class="muted small">${ago(e.t)}</span></div>`).join('') || '<div class="empty">Zatím nic.</div>'}</div></div>
+      <div style="display:grid;gap:16px">
+        <div class="card"><h2>Nejlepší hráči</h2><div class="feed">${data.users.slice(0, 5).map((u, i) =>
+          `<div class="row"><span class="muted" style="width:18px">${i + 1}.</span>${avatar(u, 'sm')}<b class="grow">${esc(u.nick)}</b><b>${pts(u.points)} b.</b></div>`).join('')}</div></div>
+        <div class="card"><h2>Ke kontrole</h2>${checks.length ? `<div class="feed">${checks.map(([text, tab]) =>
+          `<div class="row"><span class="grow">${text}</span><button data-go="${tab}">Ukázat</button></div>`).join('')}</div>`
+          : '<p class="muted" style="margin:0">Všechno v pořádku.</p>'}</div>
+      </div>
+    </div>`;
+  app.querySelectorAll('[data-go]').forEach(b => b.onclick = () => {
+    state.tab = b.dataset.go;
+    if (state.tab === 'ulovky') state.catches.result = 'borderline';
+    if (state.tab === 'rybky') state.fish.status = 'off';
+    save(); render();
   });
 }
 
+function playersTab() {
+  withToolbar(searchBox(state.players.q, 'Hledat hráče…'), redraw => {
+    document.getElementById('q').oninput = e => { state.players.q = e.target.value; redraw(); };
+  }, () => {
+    const users = data.users.filter(u => matches(state.players.q, u.nick, u.motto));
+    if (!users.length) return '<div class="card empty">Nikdo takový.</div>';
+    return `<div class="players">${users.map(u => `<div class="player">
+      <span class="rank">${data.users.indexOf(u) + 1}.</span>
+      ${avatar(u)}
+      <div style="min-width:0">
+        <div class="row"><span class="nick">${esc(u.nick)}</span><span class="pill" style="--c:var(--primary)">úr. ${u.level.level} · ${esc(u.level.title)}</span>
+          ${u.hasPassword ? '' : '<span class="pill warn">bez hesla</span>'}</div>
+        ${u.motto ? `<div class="muted small">„${esc(u.motto)}“</div>` : ''}
+        <div class="muted small">${plural(u.catches, 'úlovek', 'úlovky', 'úlovků')} · ${plural(u.stickers, 'rybka', 'rybky', 'rybek')} · od ${when(u.created)}${u.lastSeen ? ` · lovil(a) ${ago(u.lastSeen)}` : ''}</div>
+      </div>
+      <div class="points"><b>${pts(u.points)}</b><span class="muted small">bodů</span></div>
+      <div class="actions">
+        <button class="primary" data-points="${u.id}">Upravit body</button>
+        ${u.hasPassword ? `<button data-reset="${u.id}">Reset hesla</button>` : ''}
+        ${!u.stickers && !u.catches ? `<button class="danger" data-delete-user="${u.id}">Smazat</button>` : ''}
+      </div></div>`).join('')}</div>`;
+  });
+}
+
+function fishTab() {
+  const f = state.fish;
+  withToolbar(searchBox(f.q, 'Hledat jméno, místo, autora…') +
+    chips('status', [['all', 'Vše'], ['active', 'Aktivní'], ['off', 'Vypnuté']], f.status) +
+    chips('kind', [['all', 'Všechny druhy'], ['sticker', 'Samolepky'], ['tattoo', 'Tetování'], ['object', 'Předměty']], f.kind),
+  redraw => {
+    document.getElementById('q').oninput = e => { f.q = e.target.value; redraw(); };
+    bindChips('status', v => { f.status = v; redraw(); });
+    bindChips('kind', v => { f.kind = v; redraw(); });
+  }, () => {
+    const list = data.stickers.filter(st =>
+      (f.status === 'all' || (f.status === 'active') === (st.status === 'active')) &&
+      (f.kind === 'all' || kindOf(st.env) === f.kind) &&
+      matches(f.q, st.fish_name, st.fish, st.name, st.author, st.hint, st.id));
+    if (!list.length) return '<div class="card empty">Žádná rybka neodpovídá filtru.</div>';
+    return `<div class="grid">${list.map(st => {
+      const on = st.status === 'active';
+      return `<div class="fish ${on ? '' : 'off'}">
+        <div class="photo">${st.hasImage ? `<a href="/admin/image/sticker/${st.id}" target="_blank"><img loading="lazy" src="/admin/image/sticker/${st.id}" alt=""></a>` : 'bez fotky'}
+          <span class="pill ${on ? 'ok' : 'bad'}">${on ? 'aktivní' : 'vypnutá'}</span></div>
+        <div class="body">
+          <div class="row"><h3 class="grow">${esc(st.fish_name || st.fish)}</h3>${rarity(st.rarity)}</div>
+          <div class="muted small">${esc(st.fish)} · ${esc(ENV[st.env] || st.env)}</div>
+          <div>„${esc(st.name || '—')}“ <span class="muted">od ${esc(st.author)}</span></div>
+          ${st.hint ? `<div class="muted small">Nápověda: „${esc(st.hint)}“</div>` : ''}
+          <div class="small">${st.finds ? `Ulovena ${st.finds}× · <span class="muted">${esc(st.finders)}</span>` : '<span class="muted">Zatím ji nikdo neulovil</span>'}</div>
+          <div class="muted small">Přidána ${when(st.created)}${st.lat != null ? ` · <a target="_blank" rel="noopener" href="https://mapy.com/?q=${st.lat},${st.lon}">na mapě</a>` : ''}</div>
+          <div class="actions">
+            ${on ? `<button data-act="sticker_lost" data-id="${st.id}" data-done="Rybka je vypnutá">Vypnout</button>
+                    <button class="danger" data-act="sticker_not_rybka" data-id="${st.id}" data-done="Vypnuto a zařazeno mezi „není rybka“"
+                      data-confirm="Vypnout rybku a její fotku zařadit mezi „není rybka“?">Není rybka</button>`
+                 : `<button data-act="sticker_restore" data-id="${st.id}" data-done="Rybka je zase ve hře">Zapnout</button>`}
+            <button class="danger" data-act="sticker_delete" data-id="${st.id}" data-done="Rybka je smazaná"
+              data-confirm="Smazat rybku ${esc(st.fish_name || st.name || st.id)} natrvalo? Zmizí i její úlovky z akvárií a lovci i autor přijdou o body za ni. Jen schovat ji jde tlačítkem Vypnout.">Smazat</button>
+          </div>
+          <details class="edit"><summary>Upravit jméno${st.lat != null ? ' a polohu' : ''}</summary>
+            <div class="row"><input data-fish-name="${st.id}" value="${esc(st.fish_name || '')}" maxlength="40" placeholder="Jméno rybky">
+              <button data-rename="${st.id}">Uložit</button><button data-rename="${st.id}" data-random="1" title="Vylosovat nové náhodné jméno">🎲</button></div>
+            ${st.lat != null ? `<div class="row"><input data-coords="${st.id}" value="${st.lat.toFixed(6)}, ${st.lon.toFixed(6)}">
+              <button data-save-coords="${st.id}">Uložit polohu</button></div>` : ''}
+          </details>
+        </div></div>`;
+    }).join('')}</div>`;
+  });
+}
+
+function catchesTab() {
+  const f = state.catches;
+  const result = c => c.negative ? 'negative' : c.accepted ? 'accepted' : 'rejected';
+  withToolbar(searchBox(f.q, 'Hledat hráče nebo rybku…') +
+    chips('result', [['all', 'Vše'], ['accepted', 'Uloveno'], ['borderline', 'Těsně'], ['rejected', 'Nepřijato'], ['negative', 'Není rybka']], f.result),
+  redraw => {
+    document.getElementById('q').oninput = e => { f.q = e.target.value; redraw(); };
+    bindChips('result', v => { f.result = v; redraw(); });
+  }, () => {
+    const list = data.catches.filter(c =>
+      (f.result === 'all' || result(c) === f.result ||
+       (f.result === 'borderline' && result(c) === 'accepted' && c.similarity != null && c.similarity < 0.62)) &&
+      matches(f.q, c.finder, c.fish_name, c.fish, c.sticker));
+    if (!list.length) return '<div class="card empty">Žádný úlovek neodpovídá filtru.</div>';
+    return `<div class="table"><table><tr><th>Fotka</th><th>Kdo</th><th>Rybka</th><th>Výsledek</th><th class="num">Shoda</th>
+      <th class="num hide-sm">Vzdálenost</th><th class="hide-sm">Kdy</th><th></th></tr>
+      ${list.map(c => `<tr>
+        <td>${c.hasImage ? `<a target="_blank" href="/admin/image/catch/${c.id}"><img class="thumb" loading="lazy" src="/admin/image/catch/${c.id}" alt=""></a>` : ''}</td>
+        <td><b>${esc(c.finder)}</b></td>
+        <td>${esc(c.fish_name || c.fish)} ${rarity(c.rarity)}<div class="muted small">„${esc(c.sticker)}“</div></td>
+        <td>${c.negative ? '<span class="pill bad">není rybka</span>' : c.accepted ? `<span class="pill ok">${c.points != null ? `+${pts(c.points)} b.` : 'uloveno'}</span>` : '<span class="pill">nepřijato</span>'}</td>
+        <td class="num" style="color:${c.similarity == null ? 'inherit' : c.similarity >= 0.62 ? 'var(--ok)' : c.similarity >= 0.55 ? 'var(--warn)' : 'var(--muted)'}">${c.similarity != null ? Math.round(c.similarity * 100) + ' %' : '—'}</td>
+        <td class="num hide-sm">${c.distance != null ? Math.round(c.distance) + ' m' : '—'}</td>
+        <td class="muted small hide-sm">${when(c.time)}</td>
+        <td>${c.accepted && !c.negative ? `<button class="danger" data-act="catch_not_rybka" data-id="${c.id}" data-done="Body vzaty, fotka je mezi „není rybka“"
+          data-confirm="Vzít body za úlovek a fotku zařadit mezi „není rybka“?">Není rybka</button>` : ''}</td></tr>`).join('')}</table></div>`;
+  });
+}
+
+function adjustmentsTab() {
+  app.innerHTML = `<div class="toolbar"><span class="muted grow">Ruční úpravy bodů. Body hráči upravíš v záložce Hráči.</span></div>` +
+    (data.adjustments.length ? `<div class="table"><table><tr><th>Kdy</th><th>Hráč</th><th class="num">Změna</th><th>Důvod</th></tr>
+      ${data.adjustments.map(a => `<tr><td class="muted small">${when(a.time)}</td><td><b>${esc(a.nick)}</b></td>
+        <td class="num ${a.delta > 0 ? 'plus' : 'minus'}">${a.delta > 0 ? '+' : ''}${pts(a.delta)} b.</td>
+        <td>${esc(a.reason || '')}</td></tr>`).join('')}</table></div>`
+      : '<div class="card empty">Zatím žádné úpravy.</div>');
+}
+
+function keyTab() {
+  app.innerHTML = `<div class="card" style="display:grid;gap:12px;max-width:640px">
+    <h2 style="margin:0">Hardwarový klíč</h2>
+    <div class="table" style="background:var(--card)"><table><tr><th>Název</th><th>Přidán</th></tr>
+    ${data.keys.map(k => `<tr><td>${esc(k.name)}</td><td class="muted">${when(k.created)}</td></tr>`).join('')}</table></div>
+    <p class="muted small" style="margin:0">Registrace je zavřená, další klíč přidat nejde. Když klíč ztratíš, je potřeba
+      na serveru smazat záznam v tabulce admin_keys a restartovat ho – v logu pak bude nový registrační kód.</p></div>`;
+}
+
+/** Tlačítka v seznamu (po každém překreslení). */
+function bindList() {
+  app.querySelectorAll('[data-act]').forEach(b => b.onclick = () =>
+    act({action: b.dataset.act, id: b.dataset.id}, {confirmText: b.dataset.confirm, done: b.dataset.done, button: b}));
+  app.querySelectorAll('[data-save-coords]').forEach(b => b.onclick = () => {
+    const id = b.dataset.saveCoords;
+    act({action: 'set_position', id, coords: app.querySelector(`[data-coords="${id}"]`).value}, {done: 'Poloha uložená', button: b});
+  });
+  app.querySelectorAll('[data-rename]').forEach(b => b.onclick = () => {
+    const id = b.dataset.rename;
+    const name = b.dataset.random ? '' : app.querySelector(`[data-fish-name="${id}"]`).value.trim();
+    if (!b.dataset.random && !name) return toast('Napiš jméno, nebo ho vylosuj 🎲', true);
+    act({action: 'rename_fish', id, name}, {done: b.dataset.random ? 'Vylosováno nové jméno' : 'Přejmenováno', button: b});
+  });
+  app.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => act({action: 'reset_password', id: b.dataset.reset},
+    {confirmText: 'Hráč si nastaví nové heslo prvním přihlášením. Pokračovat?', done: 'Heslo resetováno', button: b}));
+  app.querySelectorAll('[data-delete-user]').forEach(b => b.onclick = () => act({action: 'delete_user', id: b.dataset.deleteUser},
+    {confirmText: 'Smazat prázdný účet?', done: 'Účet smazán', button: b}));
+  app.querySelectorAll('[data-points]').forEach(b => b.onclick = () => openPoints(data.users.find(u => String(u.id) === b.dataset.points)));
+}
+
+// --- úprava bodů ---------------------------------------------------------------
+const dlg = document.getElementById('pointsDlg');
+let pointsUser = null, pointsMode = 'add';
+function openPoints(u) {
+  pointsUser = u; pointsMode = 'add';
+  document.getElementById('pointsTitle').innerHTML = `${avatar(u, 'sm')} Body – ${esc(u.nick)}`;
+  document.getElementById('pointsValue').value = '';
+  document.getElementById('pointsReason').value = '';
+  document.getElementById('pointsErr').textContent = '';
+  document.getElementById('pointsSave').disabled = false;
+  setMode('add');
+  dlg.showModal();
+  document.getElementById('pointsValue').focus();
+}
+function setMode(mode) {
+  pointsMode = mode;
+  document.querySelectorAll('#pointsMode .chip').forEach(c => c.classList.toggle('on', c.dataset.mode === mode));
+  const quick = mode === 'add' ? [5, 10, 20, -5, -10] : [0, 50, 100];
+  document.getElementById('pointsQuick').innerHTML = quick.map(v => `<button type="button" class="chip" data-quick="${v}">${mode === 'add' && v > 0 ? '+' : ''}${v}</button>`).join('');
+  document.querySelectorAll('[data-quick]').forEach(c => c.onclick = () => { document.getElementById('pointsValue').value = c.dataset.quick; preview(); });
+  preview();
+}
+function preview() {
+  const raw = document.getElementById('pointsValue').value.replace(',', '.');
+  const value = parseFloat(raw);
+  const now = pointsUser.points;
+  const box = document.getElementById('pointsPreview');
+  if (raw === '' || isNaN(value)) { box.innerHTML = `Teď má <b>${pts(now)} b.</b>`; return; }
+  const next = pointsMode === 'set' ? value : now + value;
+  const delta = next - now;
+  box.innerHTML = `${pts(now)} b. → <b>${pts(next)} b.</b> <span class="${delta >= 0 ? 'plus' : 'minus'}">(${delta >= 0 ? '+' : ''}${pts(delta)})</span>`;
+}
+document.querySelectorAll('#pointsMode .chip').forEach(c => c.onclick = () => setMode(c.dataset.mode));
+document.getElementById('pointsValue').oninput = preview;
+document.getElementById('pointsCancel').onclick = () => dlg.close();
+document.getElementById('pointsForm').onsubmit = async e => {
+  e.preventDefault();
+  const button = document.getElementById('pointsSave');
+  button.disabled = true;
+  try {
+    await api('action', {action: 'adjust_points', id: pointsUser.id, mode: pointsMode,
+                         value: document.getElementById('pointsValue').value, reason: document.getElementById('pointsReason').value});
+    dlg.close(); await refresh(); toast(`Body hráče ${pointsUser.nick} upravené`);
+  } catch (err) { document.getElementById('pointsErr').textContent = err.message; button.disabled = false; }
+};
+
+// --- start -------------------------------------------------------------------
 async function refresh() {
   data = await api('overview');
+  // Překreslit, ale zachovat rozbalené úpravy a pozici stránky.
+  const open = [...app.querySelectorAll('details[open] [data-fish-name]')].map(i => i.dataset.fishName);
+  const y = scrollY;
   render();
+  open.forEach(id => app.querySelector(`[data-fish-name="${id}"]`)?.closest('details')?.setAttribute('open', ''));
+  scrollTo(0, y);
 }
 
 async function start() {
   try {
-    const state = await api('state');
-    if (state.loggedIn) await refresh(); else loginScreen(state);
+    const s = await api('state');
+    if (s.loggedIn) await refresh(); else loginScreen(s);
   } catch (e) {
     app.innerHTML = `<div class="card center"><p class="error">${esc(e.message)}</p></div>`;
   }

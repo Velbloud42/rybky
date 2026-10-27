@@ -6,6 +6,7 @@ Telefon přes USB:  adb reverse tcp:8000 tcp:8000
 """
 import base64
 import hashlib
+import html
 import json
 import math
 import os
@@ -14,7 +15,9 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
+import urllib.request
 from collections import Counter
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +30,12 @@ import admin
 DB_PATH = Path(os.environ.get("RYBKY_DB") or Path(__file__).with_name("rybky.db"))
 # Fotky samolepek a úlovků (JPEG) vedle databáze.
 IMAGES_DIR = DB_PATH.parent / "images"
+# Úvodní stránka /intro a její obrázky.
+WEB_DIR = Path(__file__).with_name("web")
+# Odkud se stahuje aplikace: nejnovější vydání na GitHubu (zjišťuje se nejvýš jednou za RELEASE_TTL).
+GITHUB_REPO = os.environ.get("RYBKY_GITHUB", "Velbloud42/rybky")
+RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
+RELEASE_TTL = 600
 MAX_BODY = 3_000_000
 MAX_IMAGE = 1_500_000
 
@@ -216,6 +225,14 @@ def init_db():
                 achievement TEXT NOT NULL,
                 time REAL NOT NULL,
                 PRIMARY KEY (user_id, achievement)
+            );
+            -- Ruční úpravy bodů v adminu: kdo, kolik, kdy a proč.
+            CREATE TABLE IF NOT EXISTS point_adjustments (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                delta REAL NOT NULL,
+                reason TEXT,
+                time REAL NOT NULL
             );
             """
         )
@@ -625,12 +642,61 @@ def sticker_json(row, include_location=False):
 
 
 class Raw:
-    """Odpověď, která není JSON (obrázek, HTML)."""
+    """Odpověď, která není JSON (obrázek, HTML, přesměrování)."""
 
-    def __init__(self, content_type, body, headers=None):
+    def __init__(self, content_type, body, headers=None, status=200):
         self.content_type = content_type
         self.body = body
         self.headers = headers or {}
+        self.status = status
+
+
+def redirect(url):
+    return Raw("text/plain; charset=utf-8", b"", {"Location": url, "Cache-Control": "no-cache"}, status=302)
+
+
+_release = {"data": None, "checked": 0.0}
+_release_lock = threading.Lock()
+
+
+def latest_release():
+    """Nejnovější vydání z GitHubu: verze, datum, odkaz na APK, velikost a novinky. Pamatuje si ho
+    RELEASE_TTL vteřin; když GitHub neodpovídá, vrátí poslední známé (nebo None) a zkusí to za minutu."""
+    with _release_lock:
+        if time.time() - _release["checked"] < RELEASE_TTL:
+            return _release["data"]
+    data = None
+    try:
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "rybky-server"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            r = json.load(response)
+        apk = next((a for a in r.get("assets", []) if a["name"].endswith(".apk")), None)
+        data = {"version": r["tag_name"].lstrip("v"), "published": r["published_at"], "notes": r.get("body") or "",
+                "url": apk["browser_download_url"] if apk else r["html_url"],
+                "file": apk["name"] if apk else None, "size": apk["size"] if apk else None}
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"GitHub: nejnovější verzi nejde zjistit: {e!r}", flush=True)
+    with _release_lock:
+        if data:
+            _release.update(data=data, checked=time.time())
+        else:
+            _release["checked"] = time.time() - RELEASE_TTL + 60
+        return _release["data"]
+
+
+def inline_markdown(text):
+    """Tučné, `kód` a odkazy z Markdownu; všechno ostatní se escapuje."""
+    text = html.escape(text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    return re.sub(r"\[(.+?)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', text)
+
+
+def plural(n, one, few, many):
+    return one if n == 1 else few if 2 <= n <= 4 else many
 
 
 class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
@@ -650,6 +716,10 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         if url.path == "/admin" or url.path.startswith("/admin/"):
             return self.admin(method, url.path)
         routes = [
+            ("GET", r"/$", self.home),
+            ("GET", r"/intro/?$", self.intro),
+            ("GET", r"/intro/(icon|ryba)\.png$", self.intro_image),
+            ("GET", r"/download/?$", self.download),
             ("POST", r"/api/register$", self.register),
             ("POST", r"/api/login$", self.login),
             ("POST", r"/api/password$", self.set_password),
@@ -675,7 +745,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                         self.conn = conn
                         result = fn(*match.groups())
                     if isinstance(result, Raw):
-                        return self.send_raw(200, result)
+                        return self.send_raw(result.status, result)
                     return self.send_json(200, result)
             raise ApiError(404, "Neznámá adresa")
         except ApiError as e:
@@ -726,6 +796,64 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             raise ApiError(400, "Neplatná poloha")
         return lat, lon, acc
+
+    # --- úvodní stránka a stažení -----------------------------------------
+
+    def home(self):
+        return redirect("/intro")
+
+    def download(self):
+        """Vždy nejnovější APK – odkaz rybky.pravn.uk/download jde sdílet i dát do QR kódu."""
+        release = latest_release()
+        return redirect(release["url"] if release else RELEASES_URL + "/latest")
+
+    def intro_image(self, name):
+        return Raw("image/png", (WEB_DIR / f"{name}.png").read_bytes(), {"Cache-Control": "public, max-age=86400"})
+
+    def intro(self):
+        """Úvodní stránka hry: jak se hraje, bodování z nastavení serveru, pár živých čísel a nejnovější verze."""
+        release = latest_release()
+        one = lambda sql: self.conn.execute(sql).fetchone()[0]  # noqa: E731
+        fish = one("SELECT COUNT(*) FROM stickers WHERE status = 'active'")
+        players = one("SELECT COUNT(*) FROM users")
+        catches = one("SELECT COUNT(*) FROM catches WHERE accepted = 1")
+        meta, notes = ["nejnovější verze"], ""
+        if release:
+            published = datetime.fromisoformat(release["published"].replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+            meta = [f"verze {release['version']}", f"{published.day}. {published.month}. {published.year}"]
+            if release["size"]:
+                meta.insert(1, f"{release['size'] / 1e6:.0f} MB")
+            notes = "".join(f"<li>{inline_markdown(line[2:].strip())}</li>"
+                            for line in release["notes"].splitlines() if line.startswith(("- ", "* ")))
+        css_names = dict(zip(RARITIES, ("common", "uncommon", "rare", "legendary")))
+        total = sum(RARITY_WEIGHT.values())
+        values = {
+            "version": html.escape(release["version"]) if release else "",
+            "download_meta": html.escape(" · ".join(meta)),
+            "file": html.escape(release["file"] or "APK") if release else "APK",
+            "notes": notes or "<li>Opravy a vylepšení.</li>",
+            "releases_url": RELEASES_URL,
+            "stats": "".join(f"<span><strong>{n}</strong> {label}</span>" for n, label in [
+                (fish, plural(fish, "rybka ve hře", "rybky ve hře", "rybek ve hře")),
+                (players, plural(players, "hráč", "hráči", "hráčů")),
+                (catches, plural(catches, "úlovek", "úlovky", "úlovků")),
+            ]),
+            "species": str(sum(len(v) for v in FISH.values())),
+            "achievements": str(len(ACHIEVEMENTS)),
+            "rarities": "".join(
+                f'<div class="rarity {css_names[r]}"><span class="pill">{r}</span>'
+                f'<strong>{fmt_points(RARITY_POINTS[r])} b.</strong>'
+                f'<span class="muted">zhruba {round(100 * RARITY_WEIGHT[r] / total)} % rybek</span></div>'
+                for r in RARITIES
+            ),
+            "object_points": fmt_points(OBJECT_POINTS),
+            "author_points": fmt_points(AUTHOR_POINTS),
+            "levels": " → ".join(LEVEL_TITLES),
+        }
+        page = (WEB_DIR / "intro.html").read_text(encoding="utf-8")
+        for key, value in values.items():
+            page = page.replace("{{" + key + "}}", value)
+        return Raw("text/html; charset=utf-8", page.encode(), {"Cache-Control": "public, max-age=300"})
 
     # --- endpointy ------------------------------------------------------
 
@@ -1139,7 +1267,7 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     init_db()
     admin.configure(db=db, images_dir=IMAGES_DIR, catch_points=catch_points, author_points=author_points,
-                    new_fish_name=new_fish_name)
+                    new_fish_name=new_fish_name, level_info=level_info)
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Rybky backend běží na http://0.0.0.0:{port}  (databáze {DB_PATH})")
     server.serve_forever()
