@@ -28,12 +28,14 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.gms.location.Priority
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.imageembedder.ImageEmbedder
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.sqrt
@@ -223,8 +225,15 @@ fun parseCoords(text: String): Fix? {
 
 @SuppressLint("MissingPermission") // oprávnění se žádá při startu aplikace
 suspend fun currentFix(context: Context): Fix {
-    val location = LocationServices.getFusedLocationProviderClient(context)
-        .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).await()
+    val client = LocationServices.getFusedLocationProviderClient(context)
+    // Čerstvá a přesná poslední poloha stačí – uvnitř trvá nová přes GPS i desítky vteřin.
+    val last = runCatching { client.lastLocation.await() }.getOrNull()
+    val location = last?.takeIf { System.currentTimeMillis() - it.time < 60_000 && it.accuracy < 40 }
+        ?: CancellationTokenSource().let { cancel ->
+            withTimeoutOrNull(10_000) { client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cancel.token).await() }
+                .also { if (it == null) cancel.cancel() }
+        }
+        ?: last
         ?: throw ApiException("Nepodařilo se zjistit polohu. Je zapnutá GPS?")
     return Fix(location.latitude, location.longitude, location.accuracy)
 }

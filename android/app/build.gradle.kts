@@ -19,8 +19,8 @@ android {
         applicationId = "cz.rybky"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4"
+        versionCode = 5
+        versionName = "0.5"
         // Adresa backendu: api.url v local.properties (např. https://rybky.pravn.uk).
         // Bez ní lokální server přes USB: adb reverse tcp:8000 tcp:8000
         // Pro release jde přepsat: ./gradlew assembleRelease -PapiUrl=https://…
