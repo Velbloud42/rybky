@@ -1049,7 +1049,8 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     init_db()
-    admin.configure(db=db, images_dir=IMAGES_DIR, catch_points=catch_points, author_points=author_points)
+    admin.configure(db=db, images_dir=IMAGES_DIR, catch_points=catch_points, author_points=author_points,
+                    new_fish_name=new_fish_name)
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Rybky backend běží na http://0.0.0.0:{port}  (databáze {DB_PATH})")
     server.serve_forever()

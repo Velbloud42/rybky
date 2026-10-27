@@ -45,9 +45,10 @@ _setup = {"code": None, "failures": 0}
 _config = {}
 
 
-def configure(db, images_dir, catch_points, author_points):
+def configure(db, images_dir, catch_points, author_points, new_fish_name):
     """Volá server při startu. Když ještě není žádný klíč, vygeneruje kód pro registraci prvního."""
-    _config.update(db=db, images_dir=Path(images_dir), catch_points=catch_points, author_points=author_points)
+    _config.update(db=db, images_dir=Path(images_dir), catch_points=catch_points, author_points=author_points,
+                   new_fish_name=new_fish_name)
     if webauthn is None:
         print("Admin: balík webauthn chybí, /admin nepoběží.")
         return
@@ -364,6 +365,17 @@ class AdminMixin:
             if not position:
                 raise AdminError(400, "Nerozumím souřadnicím. Zkus třeba 50.0755, 14.4378")
             conn.execute("UPDATE stickers SET lat = ?, lon = ?, accuracy = 0 WHERE id = ?", (*position, ident))
+        elif action == "rename_fish":
+            # Prázdné jméno = vylosovat nové.
+            if not conn.execute("SELECT 1 FROM stickers WHERE id = ?", (ident,)).fetchone():
+                raise AdminError(404, "Samolepka neexistuje")
+            name = " ".join(str(data.get("name") or "").split()) or _config["new_fish_name"](conn)
+            if not 2 <= len(name) <= 40:
+                raise AdminError(400, "Jméno rybky musí mít 2 až 40 znaků")
+            taken = conn.execute("SELECT id, fish_name FROM stickers WHERE id != ? AND fish_name IS NOT NULL", (ident,))
+            if any(r["fish_name"].casefold() == name.casefold() for r in taken):
+                raise AdminError(409, f"Jméno „{name}“ už má jiná rybka")
+            conn.execute("UPDATE stickers SET fish_name = ? WHERE id = ?", (name, ident))
         elif action == "sticker_not_rybka":
             # Vypnout samolepku a její fotky přesunout mezi negativní vzory.
             conn.execute("UPDATE stickers SET status = 'lost' WHERE id = ?", (ident,))
