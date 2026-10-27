@@ -47,6 +47,14 @@ MAX_STICKER_SHOTS = 20
 RYBKA_MIN_SIMILARITY = 0.6
 # Rybek je víc druhů obrázků: prvních tolik samolepek/tetování se nekontroluje, jen se z nich galerie učí.
 LEARNING_STICKERS = 10
+# Stylů samolepek je jen pár, takže samotný obrázek ryby se shoduje i se samolepkou na úplně jiném místě.
+# Kterou rybku člověk fotí, se proto pozná podle okolí: telefon posílá otisky výřezů 0,45 / 0,65 / 0,9
+# snímku a okolí jsou ty dva širší (0,65 je zhruba to, co je vidět na displeji). Nejužší výřez je skoro
+# jen samotná rybka – podle něj se jen kontroluje, že na fotce rybka je.
+CONTEXT_CROPS = slice(1, 3)
+CONTEXT_MIN_SIMILARITY = 0.55
+# Ulovit (a nalepit) jde jen rybku, která je jasně podobnější než všechny ostatní v dosahu.
+MATCH_MARGIN = 0.1
 
 RARITY_WEIGHT = {"běžná": 60, "nevšední": 25, "vzácná": 12, "legendární": 3}
 RARITY_POINTS = {"běžná": 10, "nevšední": 20, "vzácná": 40, "legendární": 100}
@@ -214,6 +222,8 @@ def init_db():
         add_column(conn, "stickers", "name", "TEXT")
         add_column(conn, "stickers", "image", "TEXT")
         add_column(conn, "stickers", "fish_name", "TEXT")
+        add_column(conn, "stickers", "context", "TEXT")  # JSON: otisky okolí (originál + úlovky)
+        add_column(conn, "catches", "context", "TEXT")   # co úlovek přidal do okolí samolepky (kvůli odebrání)
         add_column(conn, "users", "avatar", "TEXT")
         add_column(conn, "users", "motto", "TEXT")
         add_column(conn, "users", "showcase", "TEXT")  # JSON seznam vybraných odznaků, NULL = poslední tři
@@ -361,6 +371,41 @@ def finders_by_sticker(conn):
     ):
         out.setdefault(r["sticker_id"], []).append(r["nick"])
     return out
+
+
+def sticker_context(row):
+    """Otisky okolí samolepky. Úplně staré samolepky je zvlášť nemají – jejich otisky jsou z celého snímku."""
+    return json.loads(row["context"] or row["embeddings"])
+
+
+def crop_context(crops):
+    """Z otisků výřezů snímku vybere ty, které ukazují i okolí (starší aplikace posílala jen jeden)."""
+    return crops[CONTEXT_CROPS] if len(crops) == 3 else crops
+
+
+def keep_originals(shots, originals=2):
+    """Nejvýš MAX_STICKER_SHOTS otisků; přebývají-li, odpadnou nejstarší z úlovků, otisky originálu zůstanou."""
+    if len(shots) <= MAX_STICKER_SHOTS:
+        return shots
+    return shots[:originals] + shots[-(MAX_STICKER_SHOTS - originals):]
+
+
+def context_similarity(context, shots):
+    return max(cosine(c, s) for c in context for s in shots)
+
+
+def reachable(conn, lat, lon, acc, exclude=None):
+    """Aktivní rybky, které by šly ulovit z tohohle místa: tetování a předměty kdekoli, samolepky v dosahu.
+    Bez polohy (nový předmět nebo tetování) všechny – i samolepka z ulice by jako „předmět“ byla duplikát."""
+    rows = conn.execute(
+        "SELECT s.*, a.nick AS author FROM stickers s JOIN users a ON a.id = s.author_id WHERE s.status = 'active'"
+    ).fetchall()
+    limit = MAX_DISTANCE_M + min(max(acc or 0, 0), 50)
+    return [
+        r for r in rows
+        if r["id"] != exclude and (lat is None or r["env"] in PORTABLE or (
+            r["lat"] is not None and distance_m(lat, lon, r["lat"], r["lon"]) <= limit))
+    ]
 
 
 def catch_points(env, rarity):
@@ -852,6 +897,14 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             raise ApiError(400, "Neplatný otisk obrázku")
         if learned_count(self.conn) >= LEARNING_STICKERS and not rybka_check(self.conn, embeddings)[1]:
             raise ApiError(422, "Na fotce není rybka z Rybek. Vyfoť ji zblízka.")
+        # Stejnou rybku nejde přidat dvakrát: když by ji lov poznal jako už existující, je to duplikát.
+        # Stejný motiv na jiném místě (nebo jiném předmětu) projde, protože se liší okolím.
+        context = crop_context(embeddings)
+        for r in reachable(self.conn, lat, lon, acc):
+            if context_similarity(context, sticker_context(r)) >= CONTEXT_MIN_SIMILARITY:
+                what = {TATTOO: "Tohle tetování", OBJECT: "Tenhle předmět"}.get(r["env"], "Tahle samolepka")
+                raise ApiError(409, f"{what} už ve hře je – „{r['name']}“, přidal(a) {r['author']}. "
+                                    "Stejnou rybku dvakrát přidat nejde.")
         name = str(data.get("name") or "").strip()
         if not 2 <= len(name) <= 40:
             raise ApiError(400, {TATTOO: "Napiš jméno osoby (2 až 40 znaků)",
@@ -866,10 +919,10 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         now = time.time()
         self.conn.execute(
             """INSERT INTO stickers (id, author_id, name, fish, fish_name, rarity, env, hint, lat, lon, accuracy,
-                                     embeddings, image, created, activated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                     embeddings, context, image, created, activated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (sid, u["id"], name, fish, new_fish_name(self.conn), rarity, env, hint, lat, lon, acc,
-             json.dumps([rounded(e) for e in embeddings]), image, now, now),
+             json.dumps([rounded(e) for e in embeddings]), json.dumps([rounded(e) for e in context]), image, now, now),
         )
         for e in embeddings:
             add_ref(self.conn, e, "sticker", f"sticker:{sid}")
@@ -879,23 +932,28 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                 "authorPoints": author_points(env)}
 
     def nearby(self):
-        """Otisky samolepek v okolí a všech tetování a předmětů pro rozpoznávání v kameře. Polohu neprozrazuje."""
+        """Otisky samolepek v okolí a všech tetování a předmětů pro rozpoznávání v kameře. Polohu neprozrazuje.
+        S ?context=1 (aplikace od 0.11) posílá místo všech otisků jen otisky okolí."""
         u = self.user()
         try:
             lat, lon = float(self.query["lat"]), float(self.query["lon"])
         except (KeyError, ValueError):
             raise ApiError(400, "Chybí poloha")
         rows = self.conn.execute(
-            """SELECT s.id, s.name, s.env, s.rarity, s.fish_name, s.lat, s.lon, s.embeddings, s.author_id,
+            """SELECT s.id, s.name, s.env, s.rarity, s.fish_name, s.lat, s.lon, s.embeddings, s.context, s.author_id,
                       EXISTS(SELECT 1 FROM catches c WHERE c.sticker_id = s.id AND c.finder_id = ? AND c.accepted = 1) AS caught
                FROM stickers s WHERE s.status = 'active'""",
             (u["id"],),
         ).fetchall()
+        if self.query.get("context"):
+            shots = lambda r: {"context": sticker_context(r), "minSimilarity": CONTEXT_MIN_SIMILARITY, "margin": MATCH_MARGIN}
+        else:
+            shots = lambda r: {"embeddings": json.loads(r["embeddings"]),
+                               "minSimilarity": MIN_SIMILARITY_PORTABLE if r["env"] in PORTABLE else MIN_SIMILARITY}
         return [
-            {"id": r["id"], "embeddings": json.loads(r["embeddings"]),
+            {"id": r["id"], **shots(r),
              "kind": r["env"] if r["env"] in PORTABLE else "sticker",
              "tattoo": r["env"] == TATTOO,
-             "minSimilarity": MIN_SIMILARITY_PORTABLE if r["env"] in PORTABLE else MIN_SIMILARITY,
              "name": r["name"] if r["env"] in PORTABLE else None,
              "rarity": r["rarity"],
              "fishName": r["fish_name"] if r["caught"] or r["author_id"] == u["id"] else None,
@@ -905,10 +963,17 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         ]
 
     def scan(self):
+        """Úlovek. Aplikace od 0.11 posílá otisky všech výřezů snímku (embeddings), starší jen jeden (embedding)."""
         u = self.user()
         data = self.body()
         sid = str(data.get("id", "")).strip().upper()
-        embedding = parse_embedding(data.get("embedding"))
+        legacy = not isinstance(data.get("embeddings"), list)
+        if legacy:
+            crops = [parse_embedding(data.get("embedding"))]
+        elif 1 <= len(data["embeddings"]) <= 5:
+            crops = [parse_embedding(e) for e in data["embeddings"]]
+        else:
+            raise ApiError(400, "Neplatný otisk obrázku")
         row = self.conn.execute(
             "SELECT s.*, a.nick AS author FROM stickers s JOIN users a ON a.id = s.author_id WHERE s.id = ?",
             (sid,),
@@ -921,22 +986,38 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             raise ApiError(409, "Tahle samolepka už tu není")
         portable = row["env"] in PORTABLE
         if portable:
-            lat = lon = acc = dist = None
+            dist = None
+            try:  # poloha u tetování není nutná, ale hodí se na porovnání se samolepkami v okolí
+                lat, lon, acc = self.coords(data)
+            except ApiError:
+                lat = lon = acc = None
         else:
             lat, lon, acc = self.coords(data)
             dist = distance_m(lat, lon, row["lat"], row["lon"])
         shots = json.loads(row["embeddings"])
-        similarity = max(cosine(embedding, e) for e in shots)
-        if portable and learned_count(self.conn) >= LEARNING_STICKERS and not rybka_check(self.conn, [embedding])[1]:
+        learning = learned_count(self.conn) < LEARNING_STICKERS
+        context = crop_context(crops)
+        if legacy:
+            similarity = max(cosine(crops[0], e) for e in shots)
+            min_similarity = MIN_SIMILARITY_PORTABLE if portable else MIN_SIMILARITY
+            rival = -1.0
             # U tetování a předmětů s mírnější hranicí musí fotka navíc vypadat jako rybka.
-            similarity = 0.0
-        min_similarity = MIN_SIMILARITY_PORTABLE if portable else MIN_SIMILARITY
+            fish = not portable or learning or rybka_check(self.conn, crops)[1]
+        else:
+            # Která rybka to je, rozhoduje okolí; a musí být jasně podobnější než ostatní rybky v dosahu
+            # (i vlastní a už ulovené), jinak by stejný motiv jinde šel ulovit místo ní.
+            similarity = context_similarity(context, sticker_context(row))
+            min_similarity = CONTEXT_MIN_SIMILARITY
+            rival = max((context_similarity(context, sticker_context(r))
+                         for r in reachable(self.conn, lat, lon, acc, exclude=sid)), default=-1.0)
+            fish = learning or rybka_check(self.conn, crops)[1]
         limit = None if portable else MAX_DISTANCE_M + min(max(acc, 0), 50)
         near = portable or dist <= limit
         already = self.conn.execute(
             "SELECT 1 FROM catches WHERE sticker_id = ? AND finder_id = ? AND accepted = 1", (sid, u["id"])
         ).fetchone()
-        accepted = near and similarity >= min_similarity and not already
+        unique = similarity - rival >= MATCH_MARGIN
+        accepted = near and fish and similarity >= min_similarity and unique and not already
         self.before_stats = user_stats(self.conn, u["id"]) if accepted else None
         points = catch_points(row["env"], row["rarity"]) if accepted else 0
         catch_id = self.conn.execute(
@@ -951,15 +1032,23 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         if not near:
             return {**base, "result": "too_far",
                     "message": "Tahle samolepka visí jinde. Jdi blíž, nebo ji někdo přesunul."}
+        if not fish:
+            return {**base, "result": "no_match", "message": "Na fotce není vidět rybka. Zaměř samolepku do čtverce."}
+        if not unique and similarity >= min_similarity:
+            return {**base, "result": "no_match",
+                    "message": "Podobá se to víc rybkám najednou. Ustup, ať je vidět i okolí samolepky."}
         if not accepted:
-            return {**base, "result": "no_match", "message": "Obrázek nesedí. Zkus samolepku vyfotit zblízka."}
-        # Fotka úlovku jde do akvária; otisk se přidá ke vzorům i k samolepce, ať se pozná z víc úhlů.
+            return {**base, "result": "no_match", "message": "Obrázek nesedí. Zkus samolepku vyfotit i s okolím."}
+        # Fotka úlovku jde do akvária. Motiv (nejužší výřez) jde mezi vzory rybky, okolí k samolepce,
+        # ať se pozná z víc úhlů; co se přidalo, si úlovek pamatuje, aby to admin mohl vzít zpět.
         image = save_image(data, f"catch-{catch_id}")
-        self.conn.execute("UPDATE catches SET image = ? WHERE id = ?", (image, catch_id))
-        add_ref(self.conn, embedding, "catch", f"catch:{catch_id}")
+        added = [] if legacy else [rounded(c) for c in context]
+        self.conn.execute("UPDATE catches SET image = ?, context = ? WHERE id = ?", (image, json.dumps(added), catch_id))
+        add_ref(self.conn, crops[0], "catch", f"catch:{catch_id}")
         self.conn.execute(
-            "UPDATE stickers SET embeddings = ? WHERE id = ?",
-            (json.dumps((shots + [rounded(embedding)])[-MAX_STICKER_SHOTS:]), sid),
+            "UPDATE stickers SET embeddings = ?, context = ? WHERE id = ?",
+            (json.dumps((shots + [rounded(crops[0])])[-MAX_STICKER_SHOTS:]),
+             json.dumps(keep_originals(sticker_context(row) + added)), sid),
         )
         self.conn.execute("UPDATE users SET points = points + ? WHERE id = ?", (points, u["id"]))
         self.conn.execute("UPDATE users SET points = points + ? WHERE id = ?",

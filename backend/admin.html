@@ -195,7 +195,8 @@ function render() {
       <div class="row">${st.status === 'active'
         ? `<button data-act="sticker_lost" data-id="${st.id}">Vypnout</button>
            <button class="danger" data-act="sticker_not_rybka" data-id="${st.id}" data-confirm="Vypnout samolepku a její fotku zařadit mezi „není rybka“?">Není rybka</button>`
-        : `<button data-act="sticker_restore" data-id="${st.id}">Zapnout</button>`}</div></div>`).join('') || '<p class="muted">Zatím nic.</p>'}</div>`;
+        : `<button data-act="sticker_restore" data-id="${st.id}">Zapnout</button>`}
+        <button class="danger" data-act="sticker_delete" data-id="${st.id}" data-confirm="Smazat rybku ${esc(st.fish_name || st.name || st.id)} natrvalo? Zmizí i její úlovky z akvárií a lovci i autor přijdou o body za ni. Jen schovat ji jde tlačítkem Vypnout.">Smazat</button></div></div>`).join('') || '<p class="muted">Zatím nic.</p>'}</div>`;
   } else if (tab === 'ulovky') {
     body = `<div class="card table-wrap"><table><tr><th>Fotka</th><th>Kdo</th><th>Co</th><th>Výsledek</th><th>Shoda</th><th>Vzdálenost</th><th>Kdy</th><th></th></tr>
       ${data.catches.map(c => `<tr>

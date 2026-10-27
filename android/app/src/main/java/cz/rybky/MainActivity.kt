@@ -94,8 +94,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/** Stejná hranice jako MIN_SIMILARITY na serveru. */
-const val MIN_SIMILARITY = 0.75f
+/** Stejné hranice jako CONTEXT_MIN_SIMILARITY a MATCH_MARGIN na serveru (server je posílá i v nearby). */
+const val MIN_SIMILARITY = 0.55f
+const val MATCH_MARGIN = 0.1f
 
 /** Kolik snímků po sobě musí sedět, než se pošle úlovek (aby nestačil jeden náhodný snímek). */
 const val MATCH_STREAK = 3
@@ -361,7 +362,8 @@ fun LoginScreen(api: Api, onLoggedIn: (String) -> Unit) {
 
 /** Rybka, kterou kamera porovnává. Vlastní a už ulovené se jen poznají, ulovit nejdou. */
 private class Candidate(
-    val id: String, val embeddings: List<FloatArray>, val kind: String, val name: String?, val minSimilarity: Float,
+    val id: String, val context: List<FloatArray>, val kind: String, val name: String?,
+    val minSimilarity: Float, val margin: Float,
     val own: Boolean, val caught: Boolean, val rarity: String?, val fishName: String?,
 ) {
     val portable get() = isPortable(kind)
@@ -388,6 +390,9 @@ fun HuntScreen(api: Api, embedder: Embedder) {
     var fix by remember { mutableStateOf<Fix?>(null) }
     var similarity by remember { mutableStateOf(0f) }
     var bestMatch by remember { mutableStateOf<Candidate?>(null) }
+    var clear by remember { mutableStateOf(true) }
+    var fishSeen by remember { mutableStateOf(true) }
+    var rybka by remember { mutableStateOf<Rybka?>(null) }
     var streak by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<JSONObject?>(null) }
@@ -395,6 +400,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
     var reload by remember { mutableIntStateOf(0) }
     val snapshot = remember { CameraSnapshot() }
 
+    LaunchedEffect(Unit) { runCatching { loadRybka(api) }.onSuccess { rybka = it } }
     LaunchedEffect(reload) {
         error = null
         candidates = null
@@ -403,13 +409,13 @@ fun HuntScreen(api: Api, embedder: Embedder) {
             fix = f
             api.nearby(f.lat, f.lon).objects()
                 .map { o ->
-                    val shots = o.getJSONArray("embeddings")
                     Candidate(
                         o.getString("id"),
-                        shots.toEmbeddings(),
+                        o.getJSONArray("context").toEmbeddings(),
                         o.optString("kind").ifEmpty { if (o.optBoolean("tattoo")) TATTOO else "sticker" },
-                        o.optString("name").ifEmpty { null },
+                        o.str("name"),
                         o.optDouble("minSimilarity", MIN_SIMILARITY.toDouble()).toFloat(),
+                        o.optDouble("margin", MATCH_MARGIN.toDouble()).toFloat(),
                         o.getBoolean("own"), o.getBoolean("caught"), o.str("rarity"), o.str("fishName"),
                     )
                 }
@@ -421,13 +427,17 @@ fun HuntScreen(api: Api, embedder: Embedder) {
             val list = candidates ?: return@CameraView
             if (busy || result != null) return@CameraView
             val crops = embedder.embedCrops(frame)
-            // Každá samolepka má vlastní hranici (tetování a předměty mírnější), vybírá se ta, která ji
-            // přesahuje nejvíc; u každé se bere nejlepší z výřezů snímku.
-            val best = list.map { c -> c to bestMatch(crops, c.embeddings) }
-                .maxByOrNull { (c, match) -> match.first - c.minSimilarity }
-            similarity = best?.second?.first ?: 0f
+            // Kterou rybku fotím, pozná okolí samolepky; musí být jasně podobnější než všechny ostatní
+            // (i vlastní a už ulovené), jinak by se stejný motiv jinde ulovil místo ní.
+            val context = contextCrops(crops)
+            val scored = list.map { c -> c to (c.context.maxOfOrNull { s -> context.maxOf { cosine(it, s) } } ?: 0f) }
+                .sortedByDescending { it.second }
+            val best = scored.firstOrNull()
+            similarity = best?.second ?: 0f
             bestMatch = best?.first
-            val passes = best != null && best.second.first >= best.first.minSimilarity
+            clear = best == null || best.second - (scored.getOrNull(1)?.second ?: -1f) >= best.first.margin
+            fishSeen = rybka.recognizes(rybka?.check(crops))
+            val passes = best != null && best.second >= best.first.minSimilarity && clear && fishSeen
             // Vlastní nebo už ulovenou rybku jen ukáže, na server ji neposílá.
             streak = if (passes && best!!.first.catchable) streak + 1 else 0
             val f = fix
@@ -437,7 +447,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                 scope.launch {
                     runCatching {
                         val photo = snapshot.take()?.let { withContext(Dispatchers.Default) { it.jpegBase64() } }
-                        api.scan(best.first.id, f, best.second.second, photo)
+                        api.scan(best.first.id, f, crops, photo)
                     }
                         .onSuccess { result = it }
                         .onFailure { error = it.message }
@@ -445,8 +455,8 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                 }
             }
         }
-        val passing = bestMatch?.let { similarity >= it.minSimilarity } == true
-        AimSquare(if (passing) Amber else Color.White)
+        val similar = bestMatch?.let { similarity >= it.minSimilarity } == true
+        AimSquare(if (similar && clear && fishSeen) Amber else Color.White)
 
         Column(Modifier.align(Alignment.BottomCenter).padding(16.dp).fillMaxWidth()) {
             val res = result
@@ -475,8 +485,17 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                     )
                     Spacer(Modifier.height(8.dp))
                     val match = bestMatch
-                    if (match != null && !match.catchable && similarity >= match.minSimilarity) {
-                        Text(
+                    when {
+                        match == null || !similar -> {}
+                        !clear -> Text(
+                            "Podobá se víc rybkám najednou – ustup, ať je vidět i okolí samolepky.",
+                            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                        )
+                        !fishSeen -> Text(
+                            "Rybka není vidět – zaměř samolepku do čtverce.",
+                            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                        )
+                        !match.catchable -> Text(
                             if (match.own) "Tohle je tvoje rybka (${match.label.substringBefore(" (")}) – vlastní ulovit nejde."
                             else "Tuhle rybku už máš v akváriu.",
                             fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,

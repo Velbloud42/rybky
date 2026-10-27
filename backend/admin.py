@@ -382,6 +382,8 @@ class AdminMixin:
             conn.execute("UPDATE refs SET negative = 1 WHERE origin = ?", (f"sticker:{ident}",))
         elif action == "catch_not_rybka":
             self._revoke_catch(int(ident))
+        elif action == "sticker_delete":
+            self._delete_sticker(ident)
         else:
             raise AdminError(400, "Neznámá akce")
         return {"ok": True}
@@ -407,3 +409,31 @@ class AdminMixin:
             if shots:
                 conn.execute("UPDATE stickers SET embeddings = ? WHERE id = ?", (json.dumps(shots), c["sticker_id"]))
             conn.execute("UPDATE refs SET negative = 1 WHERE origin = ?", (f"catch:{catch_id}",))
+        # I okolí, které úlovek samolepce přidal, už k ní nepatří.
+        added = json.loads(c["context"] or "[]")
+        sticker = conn.execute("SELECT context FROM stickers WHERE id = ?", (c["sticker_id"],)).fetchone()
+        if added and sticker["context"]:
+            kept = [e for e in json.loads(sticker["context"]) if e not in added]
+            if kept:
+                conn.execute("UPDATE stickers SET context = ? WHERE id = ?", (json.dumps(kept), c["sticker_id"]))
+
+    def _delete_sticker(self, sticker_id):
+        """Smaže rybku úplně: lovci i autor přijdou o body za její úlovky, zmizí úlovky, fotky
+        i její vzory v galerii. Vzory označené „není rybka“ zůstanou, ty se hodí dál."""
+        conn = self.conn
+        s = conn.execute("SELECT * FROM stickers WHERE id = ?", (sticker_id,)).fetchone()
+        if not s:
+            raise AdminError(404, "Samolepka neexistuje")
+        images = [s["image"]]
+        for c in conn.execute("SELECT * FROM catches WHERE sticker_id = ?", (sticker_id,)).fetchall():
+            if c["accepted"]:
+                points = c["points"] if c["points"] is not None else _config["catch_points"](s["env"], s["rarity"])
+                conn.execute("UPDATE users SET points = points - ? WHERE id = ?", (points, c["finder_id"]))
+                conn.execute("UPDATE users SET points = points - ? WHERE id = ?", (_config["author_points"](s["env"]), s["author_id"]))
+            conn.execute("DELETE FROM refs WHERE origin = ? AND negative = 0", (f"catch:{c['id']}",))
+            images.append(c["image"])
+        conn.execute("DELETE FROM catches WHERE sticker_id = ?", (sticker_id,))
+        conn.execute("DELETE FROM refs WHERE origin = ? AND negative = 0", (f"sticker:{sticker_id}",))
+        conn.execute("DELETE FROM stickers WHERE id = ?", (sticker_id,))
+        for name in filter(None, images):
+            (_config["images_dir"] / name).unlink(missing_ok=True)

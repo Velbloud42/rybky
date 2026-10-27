@@ -38,8 +38,9 @@ class Api(var token: String?) {
         "POST", "/api/references/seed", JSONObject().put("embeddings", JSONArray(embeddings.map { it.toJson() })),
     ) as JSONObject
 
+    /** Rybky, které jde ulovit odsud, s otisky jejich okolí. */
     suspend fun nearby(lat: Double, lon: Double): JSONArray =
-        call("GET", "/api/nearby?lat=$lat&lon=$lon") as JSONArray
+        call("GET", "/api/nearby?lat=$lat&lon=$lon&context=1") as JSONArray
 
     suspend fun map(lat: Double, lon: Double): JSONArray =
         call("GET", "/api/map?lat=$lat&lon=$lon") as JSONArray
@@ -52,9 +53,10 @@ class Api(var token: String?) {
             .put("embeddings", JSONArray(embeddings.map { it.toJson() })),
     ) as JSONObject
 
-    suspend fun scan(id: String, fix: Fix, embedding: FloatArray, image: String?): JSONObject = call(
+    /** Úlovek: otisky všech výřezů snímku (server z nich pozná rybku i okolí) a fotka do akvária. */
+    suspend fun scan(id: String, fix: Fix, crops: List<FloatArray>, image: String?): JSONObject = call(
         "POST", "/api/scan",
-        fix.json().put("id", id).put("embedding", embedding.toJson()).put("image", image),
+        fix.json().put("id", id).put("embeddings", JSONArray(crops.map { it.toJson() })).put("image", image),
     ) as JSONObject
 
     /** Fotka úlovku nebo vlastní samolepky (JPEG). */

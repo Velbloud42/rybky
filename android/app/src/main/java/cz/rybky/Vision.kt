@@ -50,6 +50,13 @@ const val AIM_FRACTION = 0.65f
  */
 val CROP_FRACTIONS = listOf(0.45f, AIM_FRACTION, 0.9f)
 
+/**
+ * Výřezy se samolepkou i s okolím (0,65 – zhruba to, co je vidět na displeji – a 0,9). Podle nich se pozná,
+ * která rybka to je: stylů samolepek je jen pár, takže samotný obrázek ryby (0,45) se shoduje i se
+ * samolepkou na úplně jiném místě. Nejužší výřez slouží jen ke kontrole, že na snímku rybka je.
+ */
+fun contextCrops(crops: List<FloatArray>) = crops.drop(1)
+
 /** Udělá z obrázku „otisk“ – vektor, který je podobný pro podobné obrázky. */
 class Embedder(context: Context) : AutoCloseable {
     private val embedder = ImageEmbedder.createFromOptions(
@@ -88,10 +95,6 @@ fun cosine(a: FloatArray, b: FloatArray): Float {
     }
     return if (na > 0 && nb > 0) dot / (sqrt(na) * sqrt(nb)) else 0f
 }
-
-/** Nejlepší shoda mezi otisky výřezů snímku a otisky samolepky: (shoda, otisk výřezu, který ji dal). */
-fun bestMatch(crops: List<FloatArray>, shots: List<FloatArray>): Pair<Float, FloatArray> =
-    crops.map { c -> shots.maxOf { cosine(c, it) } to c }.maxBy { it.first }
 
 /** Čtverec ze středu obrázku o velikosti [fraction] kratší strany. */
 fun centerCrop(bitmap: Bitmap, fraction: Float = 1f): Bitmap {
