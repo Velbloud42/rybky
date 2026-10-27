@@ -83,6 +83,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -486,11 +487,22 @@ fun HuntScreen(api: Api, embedder: Embedder) {
 
 @Composable
 private fun CatchResult(res: JSONObject, onContinue: () -> Unit) {
-    Text(res.getString("message"), fontSize = 18.sp, fontWeight = FontWeight.Bold)
-    if (res.optString("result") == "caught") {
-        Text(
-            "+${res.optString("pointsText").ifEmpty { formatPoints(res.getDouble("points")) }} b.",
-            color = MaterialTheme.colorScheme.primary, fontSize = 18.sp,
+    if (res.optString("result") != "caught") {
+        Text(res.getString("message"), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+    } else {
+        val sticker = res.getJSONObject("sticker")
+        val name = sticker.optString("name")
+        Text("Úlovek!", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Amber, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+        FishReveal(
+            fish = sticker.getString("fish"),
+            rarity = sticker.getString("rarity"),
+            envName = sticker.optString("envName").ifEmpty { null },
+            points = "+${res.optString("pointsText").ifEmpty { formatPoints(res.getDouble("points")) }} b.",
+            details = when (sticker.optString("env")) {
+                TATTOO -> "Z tetování, které nosí $name"
+                OBJECT -> "Z předmětu „$name“"
+                else -> "Samolepka „$name“ · nalepil(a) ${res.optString("author")}"
+            },
         )
         val level = res.getJSONObject("level")
         if (res.optBoolean("levelUp")) {

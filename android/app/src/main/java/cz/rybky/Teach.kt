@@ -107,11 +107,25 @@ fun TeachScreen(api: Api, embedder: Embedder) {
     val sticker = done
     if (sticker != null) {
         Centered {
-            Icon(Icons.Outlined.SetMeal, null, Modifier.size(72.dp), tint = Amber)
-            Text("Nalepeno!", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            val name = sticker.getString("name")
+            val catchPoints = sticker.optString("catchPointsText").ifEmpty { "?" }
+            val authorPoints = sticker.optInt("authorPoints")
             Text(
-                "„${sticker.getString("name")}“ skrývá rybu ${sticker.getString("fish")} (${sticker.getString("rarity")}).",
-                textAlign = TextAlign.Center,
+                when (sticker.optString("env")) {
+                    TATTOO -> "Tetování „$name“ je ve hře!"
+                    OBJECT -> "Předmět „$name“ je ve hře!"
+                    else -> "„$name“ nalepeno!"
+                },
+                fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+            FishReveal(
+                fish = sticker.getString("fish"),
+                rarity = sticker.getString("rarity"),
+                envName = sticker.optString("envName").ifEmpty { null },
+                points = "$catchPoints b. za úlovek",
+                details = "Kdo ji uloví, dostane $catchPoints b." +
+                    if (authorPoints > 0) " a ty pokaždé $authorPoints b." else " Za předmět autor body nedostává.",
             )
             Spacer(Modifier.height(24.dp))
             Button(onClick = { form.clear(); shot = null; done = null }) { Text("Nalepit další") }

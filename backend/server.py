@@ -657,7 +657,10 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         )
         for e in embeddings:
             add_ref(self.conn, e, "sticker", f"sticker:{sid}")
-        return sticker_json(self.conn.execute("SELECT * FROM stickers WHERE id = ?", (sid,)).fetchone())
+        # Kolik dostane lovec a kolik autor za každý úlovek – ukáže se hned po nalepení.
+        return {**sticker_json(self.conn.execute("SELECT * FROM stickers WHERE id = ?", (sid,)).fetchone()),
+                "catchPoints": catch_points(env, rarity), "catchPointsText": fmt_points(catch_points(env, rarity)),
+                "authorPoints": author_points(env)}
 
     def nearby(self):
         """Otisky samolepek v okolí a všech tetování a předmětů pro rozpoznávání v kameře. Polohu neprozrazuje."""
