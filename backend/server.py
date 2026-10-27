@@ -132,6 +132,54 @@ def init_db():
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(stickers)")}
         if "name" not in columns:
             conn.execute("ALTER TABLE stickers ADD COLUMN name TEXT")
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        if "password" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN password TEXT")  # salt$hash, NULL = staré konto bez hesla
+        if "nick_key" not in columns:
+            # COLLATE NOCASE nezná diakritiku („Šárka“ ≠ „šárka“), proto vlastní klíč.
+            conn.execute("ALTER TABLE users ADD COLUMN nick_key TEXT")
+            for r in conn.execute("SELECT id, nick FROM users").fetchall():
+                conn.execute("UPDATE users SET nick_key = ? WHERE id = ?", (nick_key(r["nick"]), r["id"]))
+            merge_duplicate_nicks(conn)
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_nick_key ON users(nick_key)")
+
+
+def nick_key(nick):
+    return nick.strip().casefold()
+
+
+def merge_duplicate_nicks(conn):
+    """Prázdné duplicitní účty (stejná přezdívka jinou velikostí písmen) smaže, nejstarší nechá."""
+    dupes = conn.execute("SELECT nick_key FROM users GROUP BY nick_key HAVING COUNT(*) > 1").fetchall()
+    for (key,) in dupes:
+        rows = conn.execute("SELECT id FROM users WHERE nick_key = ? ORDER BY created", (key,)).fetchall()
+        for (uid,) in rows[1:]:
+            used = conn.execute(
+                "SELECT (SELECT COUNT(*) FROM stickers WHERE author_id = ?) + (SELECT COUNT(*) FROM catches WHERE finder_id = ?)",
+                (uid, uid),
+            ).fetchone()[0]
+            if used:
+                conn.execute("UPDATE users SET nick_key = ? WHERE id = ?", (f"{key}#{uid}", uid))
+            else:
+                conn.execute("DELETE FROM users WHERE id = ?", (uid,))
+
+
+def hash_password(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 200_000).hex()
+    return f"{salt}${digest}"
+
+
+def check_password(password, stored):
+    salt = stored.split("$", 1)[0]
+    return secrets.compare_digest(hash_password(password, salt), stored)
+
+
+def valid_password(data):
+    password = str(data.get("password") or "")
+    if len(password) < 4:
+        raise ApiError(400, "Heslo musí mít aspoň 4 znaky")
+    return password
 
 
 def distance_m(lat1, lon1, lat2, lon2):
@@ -281,6 +329,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         routes = [
             ("POST", r"/api/register$", self.register),
+            ("POST", r"/api/login$", self.login),
+            ("POST", r"/api/password$", self.set_password),
             ("GET", r"/api/me$", self.me),
             ("GET", r"/api/environments$", self.environments),
             ("GET", r"/api/fish$", self.fish_atlas),
@@ -346,17 +396,40 @@ class Handler(BaseHTTPRequestHandler):
     # --- endpointy ------------------------------------------------------
 
     def register(self):
-        nick = str(self.body().get("nick", "")).strip()
+        data = self.body()
+        nick = str(data.get("nick", "")).strip()
         if not 3 <= len(nick) <= 20:
             raise ApiError(400, "Přezdívka musí mít 3 až 20 znaků")
+        password = valid_password(data)
         token = secrets.token_urlsafe(24)
         try:
             self.conn.execute(
-                "INSERT INTO users (nick, token, created) VALUES (?, ?, ?)", (nick, token, time.time())
+                "INSERT INTO users (nick, nick_key, password, token, created) VALUES (?, ?, ?, ?, ?)",
+                (nick, nick_key(nick), hash_password(password), token, time.time()),
             )
         except sqlite3.IntegrityError:
-            raise ApiError(409, "Tahle přezdívka už je obsazená")
+            raise ApiError(409, "Tahle přezdívka už je obsazená. Jestli je tvoje, přihlas se.")
         return {"token": token, "nick": nick}
+
+    def login(self):
+        """Přihlášení přezdívkou a heslem. Staré účty bez hesla si první přihlášení heslem „zabere“."""
+        data = self.body()
+        password = valid_password(data)
+        row = self.conn.execute(
+            "SELECT * FROM users WHERE nick_key = ?", (nick_key(str(data.get("nick", ""))),)
+        ).fetchone()
+        if not row:
+            raise ApiError(404, "Takovou přezdívku neznám")
+        if row["password"] is None:
+            self.conn.execute("UPDATE users SET password = ? WHERE id = ?", (hash_password(password), row["id"]))
+        elif not check_password(password, row["password"]):
+            raise ApiError(401, "Špatné heslo")
+        return {"token": row["token"], "nick": row["nick"]}
+
+    def set_password(self):
+        u = self.user()
+        self.conn.execute("UPDATE users SET password = ? WHERE id = ?", (hash_password(valid_password(self.body())), u["id"]))
+        return {"ok": True}
 
     def me(self):
         u = self.user()
@@ -373,6 +446,7 @@ class Handler(BaseHTTPRequestHandler):
         ).fetchall()
         return {
             "nick": u["nick"],
+            "hasPassword": u["password"] is not None,
             "points": u["points"],
             "level": level_info(u["points"]),
             "achievements": achievements(user_stats(self.conn, u["id"])),

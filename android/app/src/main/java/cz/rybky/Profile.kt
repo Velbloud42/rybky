@@ -18,6 +18,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material3.Button
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.outlined.AddLocationAlt
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Brush
@@ -76,7 +84,7 @@ private val METRIC_ICONS = mapOf(
 /** Profil: úroveň a záložky Akvárium / Atlas ryb / Úspěchy / Moje samolepky. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileScreen(api: Api) {
+fun ProfileScreen(api: Api, onLogout: () -> Unit) {
     var me by remember { mutableStateOf<JSONObject?>(null) }
     var atlas by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -93,7 +101,8 @@ fun ProfileScreen(api: Api) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        LevelHeader(m)
+        LevelHeader(m, onLogout)
+        if (!m.optBoolean("hasPassword", true)) SetPasswordCard(api) { me = JSONObject(m.toString()).put("hasPassword", true) }
         val achievements = m.getJSONArray("achievements").objects()
         PrimaryTabRow(selectedTabIndex = tab) {
             listOf(
@@ -168,7 +177,7 @@ fun ProfileScreen(api: Api) {
 }
 
 @Composable
-private fun LevelHeader(m: JSONObject) {
+private fun LevelHeader(m: JSONObject, onLogout: () -> Unit) {
     val level = m.getJSONObject("level")
     val start = level.getInt("levelStart")
     val next = level.getInt("nextLevel")
@@ -196,6 +205,38 @@ private fun LevelHeader(m: JSONObject) {
                 "$points b. · do další úrovně ${next - points} b.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        IconButton(onClick = onLogout) { Icon(Icons.AutoMirrored.Outlined.Logout, "Odhlásit") }
+    }
+}
+
+/** Staré účty heslo nemají – bez něj se po přeinstalaci nebo na jiném telefonu nepřihlásí. */
+@Composable
+private fun SetPasswordCard(api: Api, onSaved: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var password by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer, shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 12.dp),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Nastav si heslo", fontWeight = FontWeight.Bold)
+            Text("Jinak se po přeinstalaci nebo na jiném telefonu ke svému účtu nedostaneš.", fontSize = 13.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    password, { password = it }, label = { Text("Heslo") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = {
+                    scope.launch {
+                        runCatching { api.setPassword(password) }.onSuccess { onSaved() }.onFailure { error = it.message }
+                    }
+                }, enabled = password.length >= 4) { Text("Uložit") }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }
     }
 }

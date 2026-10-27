@@ -49,6 +49,9 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -68,7 +71,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -158,7 +164,7 @@ fun App() {
     api.token = token
 
     when {
-        token == null -> RegisterScreen(api) { newToken ->
+        token == null -> LoginScreen(api) { newToken ->
             prefs.edit().putString("token", newToken).apply()
             token = newToken
         }
@@ -167,7 +173,10 @@ fun App() {
             Spacer(Modifier.height(12.dp))
             Button(onClick = { askPermissions.launch(PERMISSIONS) }) { Text("Povolit") }
         }
-        else -> MainScreen(api)
+        else -> MainScreen(api) {
+            prefs.edit().remove("token").apply()
+            token = null
+        }
     }
 }
 
@@ -179,7 +188,7 @@ private enum class Tab(val label: String, val icon: ImageVector, val fullScreen:
 }
 
 @Composable
-fun MainScreen(api: Api) {
+fun MainScreen(api: Api, onLogout: () -> Unit) {
     val context = LocalContext.current
     val embedder = remember { Embedder(context) }
     DisposableEffect(Unit) { onDispose { embedder.close() } }
@@ -209,19 +218,22 @@ fun MainScreen(api: Api) {
             when (tab) {
                 Tab.Hunt -> HuntScreen(api, embedder)
                 Tab.Map -> MapScreen(api)
-                Tab.Aquarium -> ProfileScreen(api)
+                Tab.Aquarium -> ProfileScreen(api, onLogout)
                 Tab.Teach -> TeachScreen(api, embedder)
             }
         }
     }
 }
 
-// --- registrace ----------------------------------------------------------
+// --- registrace a přihlášení ---------------------------------------------
 
 @Composable
-fun RegisterScreen(api: Api, onRegistered: (String) -> Unit) {
+fun LoginScreen(api: Api, onLoggedIn: (String) -> Unit) {
     val scope = rememberCoroutineScope()
+    var existing by remember { mutableStateOf(false) }
     var nick by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     Centered {
         Box(Modifier.size(120.dp).clip(CircleShape).background(FishGreen), contentAlignment = Alignment.Center) {
@@ -231,17 +243,40 @@ fun RegisterScreen(api: Api, onRegistered: (String) -> Unit) {
         Text("Rybky", fontSize = 40.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         Text("Lov samolepek po městě", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(24.dp))
+        SingleChoiceSegmentedButtonRow {
+            listOf("Nový hráč", "Mám účet").forEachIndexed { i, label ->
+                SegmentedButton(
+                    selected = existing == (i == 1), onClick = { existing = i == 1; error = null },
+                    shape = SegmentedButtonDefaults.itemShape(i, 2),
+                ) { Text(label) }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
         OutlinedTextField(nick, { nick = it }, label = { Text("Přezdívka") }, singleLine = true)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            password, { password = it }, label = { Text("Heslo") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            supportingText = if (existing) {
+                { Text("Účet bez hesla si nastaví heslo prvním přihlášením.") }
+            } else null,
+        )
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Spacer(Modifier.height(12.dp))
-        Button(onClick = {
-            scope.launch {
+        Button(
+            onClick = {
+                busy = true
                 error = null
-                runCatching { api.register(nick.trim()) }
-                    .onSuccess { onRegistered(it.getString("token")) }
-                    .onFailure { error = it.message }
-            }
-        }) { Text("Začít lovit") }
+                scope.launch {
+                    runCatching { if (existing) api.login(nick.trim(), password) else api.register(nick.trim(), password) }
+                        .onSuccess { onLoggedIn(it.getString("token")) }
+                        .onFailure { error = it.message }
+                    busy = false
+                }
+            },
+            enabled = !busy && nick.isNotBlank() && password.isNotEmpty(),
+        ) { Text(if (existing) "Přihlásit se" else "Začít lovit") }
     }
 }
 

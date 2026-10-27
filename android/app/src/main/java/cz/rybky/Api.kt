@@ -12,8 +12,14 @@ class ApiException(message: String) : Exception(message)
 /** Tenký klient k backendu (backend/server.py). Všechno je JSON. */
 class Api(var token: String?) {
 
-    suspend fun register(nick: String): JSONObject =
-        call("POST", "/api/register", JSONObject().put("nick", nick)) as JSONObject
+    suspend fun register(nick: String, password: String): JSONObject =
+        call("POST", "/api/register", JSONObject().put("nick", nick).put("password", password)) as JSONObject
+
+    suspend fun login(nick: String, password: String): JSONObject =
+        call("POST", "/api/login", JSONObject().put("nick", nick).put("password", password)) as JSONObject
+
+    suspend fun setPassword(password: String): JSONObject =
+        call("POST", "/api/password", JSONObject().put("password", password)) as JSONObject
 
     suspend fun me(): JSONObject = call("GET", "/api/me") as JSONObject
 
