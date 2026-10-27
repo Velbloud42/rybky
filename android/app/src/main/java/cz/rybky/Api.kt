@@ -40,25 +40,39 @@ class Api(var token: String?) {
         call("GET", "/api/map?lat=$lat&lon=$lon") as JSONArray
 
     suspend fun createSticker(
-        name: String, env: String, hint: String, fix: Fix?, embeddings: List<FloatArray>,
+        name: String, env: String, hint: String, fix: Fix?, embeddings: List<FloatArray>, image: String?,
     ): JSONObject = call(
         "POST", "/api/stickers",
-        (fix?.json() ?: JSONObject()).put("name", name).put("env", env).put("hint", hint)
+        (fix?.json() ?: JSONObject()).put("name", name).put("env", env).put("hint", hint).put("image", image)
             .put("embeddings", JSONArray(embeddings.map { it.toJson() })),
     ) as JSONObject
 
-    suspend fun scan(id: String, fix: Fix, embedding: FloatArray): JSONObject = call(
+    suspend fun scan(id: String, fix: Fix, embedding: FloatArray, image: String?): JSONObject = call(
         "POST", "/api/scan",
-        fix.json().put("id", id).put("embedding", embedding.toJson()),
+        fix.json().put("id", id).put("embedding", embedding.toJson()).put("image", image),
     ) as JSONObject
+
+    /** Fotka úlovku nebo vlastní samolepky (JPEG). */
+    suspend fun image(path: String): ByteArray = withContext(Dispatchers.IO) {
+        val conn = URL(BuildConfig.API_URL + path).openConnection() as HttpURLConnection
+        try {
+            token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+            if (conn.responseCode != 200) throw ApiException("Fotka není")
+            conn.inputStream.use { it.readBytes() }
+        } catch (e: java.io.IOException) {
+            throw ApiException("Fotku se nepodařilo stáhnout")
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     private suspend fun call(method: String, path: String, body: JSONObject? = null): Any =
         withContext(Dispatchers.IO) {
             val conn = URL(BuildConfig.API_URL + path).openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = method
-                conn.connectTimeout = 5000
-                conn.readTimeout = 10000
+                conn.connectTimeout = 8000
+                conn.readTimeout = 20000
                 token?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
                 if (body != null) {
                     conn.doOutput = true
@@ -91,3 +105,9 @@ private fun FloatArray.toJson() = JSONArray(map { Math.round(it * 10000) / 10000
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 
 fun JSONArray.toFloatArray() = FloatArray(length()) { getDouble(it).toFloat() }
+
+fun JSONArray.toEmbeddings() = (0 until length()).map { getJSONArray(it).toFloatArray() }
+
+/** Body můžou být i půlky (rybka na předmětu): 10 → „10“, 10.5 → „10,5“. */
+fun formatPoints(points: Double): String =
+    if (points % 1.0 == 0.0) points.toLong().toString() else String.format(java.util.Locale.forLanguageTag("cs"), "%.1f", points)

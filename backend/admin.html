@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rybky admin</title>
+<style>
+  :root {
+    --bg: #f6f9fb; --panel: #ffffff; --panel-2: #eef4f7; --text: #0f172a; --muted: #5b6b7a;
+    --line: #dbe5ec; --accent: #0e7490; --accent-text: #ffffff; --danger: #b91c1c; --ok: #15803d; --amber: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a1220; --panel: #111c2e; --panel-2: #17263c; --text: #e6edf5; --muted: #8fa3b8;
+      --line: #22344d; --accent: #67e8f9; --accent-text: #083344; --danger: #f87171; --ok: #4ade80; --amber: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1; }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  .logo { width: 30px; height: 30px; border-radius: 50%; background: #18450b; display: grid; place-items: center; color: #ebebeb; font-weight: 700; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 60px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 10px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  input { font: inherit; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); width: 100%; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; }
+  .center { max-width: 420px; margin: 10vh auto; display: grid; gap: 14px; }
+  .muted { color: var(--muted); }
+  .error { color: var(--danger); min-height: 1.4em; }
+  nav.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 18px; }
+  nav.tabs button.active { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .stat .value { font-size: 28px; font-weight: 700; }
+  .stat .label { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  .table-wrap { overflow-x: auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+  .item img, .thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; background: var(--panel-2); display: block; }
+  .noimg { width: 100%; aspect-ratio: 1; border-radius: 12px; background: var(--panel-2); display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+  .item { display: grid; gap: 8px; align-content: start; }
+  .item h3 { margin: 0; font-size: 16px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--panel-2); color: var(--muted); }
+  .pill.ok { color: var(--ok); } .pill.bad { color: var(--danger); } .pill.warn { color: var(--amber); }
+  .small-thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; background: var(--panel-2); }
+  a { color: var(--accent); }
+  @media (max-width: 600px) { th:nth-child(n+5), td:nth-child(n+5) { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">R</div>
+  <h1>Rybky admin</h1>
+  <button id="logout" hidden>Odhlásit</button>
+</header>
+<main id="app"><p class="muted">Načítám…</p></main>
+
+<script>
+const app = document.getElementById('app');
+const logoutBtn = document.getElementById('logout');
+let data = null;
+let tab = 'prehled';
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+const when = t => t ? new Date(t * 1000).toLocaleString('cs-CZ', {dateStyle: 'short', timeStyle: 'short'}) : '';
+const pts = p => (p ?? 0).toLocaleString('cs-CZ', {maximumFractionDigits: 1});
+const ENV = {voda: 'U vody', park: 'Park a příroda', mesto: 'Město', uvnitr: 'Vnitřní prostory', vrchol: 'Vrchol a výška', tetovani: 'Tetování', predmet: 'Předmět'};
+
+async function api(path, body) {
+  const res = await fetch('/admin/api/' + path, body === undefined ? {} : {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({error: 'Chyba serveru'}));
+  if (!res.ok) throw new Error(json.error || 'Chyba ' + res.status);
+  return json;
+}
+
+// --- WebAuthn: převod mezi JSON (base64url) a ArrayBuffer -------------------
+const b64uToBuf = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0)).buffer;
+const bufToB64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+function creationOptions(o) {
+  if (PublicKeyCredential.parseCreationOptionsFromJSON) return PublicKeyCredential.parseCreationOptionsFromJSON(o);
+  return {...o, challenge: b64uToBuf(o.challenge), user: {...o.user, id: b64uToBuf(o.user.id)},
+          excludeCredentials: (o.excludeCredentials || []).map(c => ({...c, id: b64uToBuf(c.id)}))};
+}
+function requestOptions(o) {
+  if (PublicKeyCredential.parseRequestOptionsFromJSON) return PublicKeyCredential.parseRequestOptionsFromJSON(o);
+  return {...o, challenge: b64uToBuf(o.challenge), allowCredentials: (o.allowCredentials || []).map(c => ({...c, id: b64uToBuf(c.id)}))};
+}
+function credentialJson(c) {
+  if (c.toJSON) return c.toJSON();
+  const r = c.response, out = {id: c.id, rawId: bufToB64u(c.rawId), type: c.type,
+    clientExtensionResults: c.getClientExtensionResults(), authenticatorAttachment: c.authenticatorAttachment,
+    response: {clientDataJSON: bufToB64u(r.clientDataJSON)}};
+  if (r.attestationObject) Object.assign(out.response, {attestationObject: bufToB64u(r.attestationObject), transports: r.getTransports ? r.getTransports() : []});
+  else Object.assign(out.response, {authenticatorData: bufToB64u(r.authenticatorData), signature: bufToB64u(r.signature),
+                                    userHandle: r.userHandle ? bufToB64u(r.userHandle) : null});
+  return out;
+}
+
+async function registerKey(code, name) {
+  const begin = await api('register/begin', {code});
+  const cred = await navigator.credentials.create({publicKey: creationOptions(begin.options)});
+  await api('register/finish', {flow: begin.flow, credential: credentialJson(cred), name});
+}
+async function login() {
+  const begin = await api('login/begin', {});
+  const cred = await navigator.credentials.get({publicKey: requestOptions(begin.options)});
+  await api('login/finish', {flow: begin.flow, credential: credentialJson(cred)});
+}
+
+// --- obrazovky -----------------------------------------------------------
+function loginScreen(state) {
+  logoutBtn.hidden = true;
+  if (!state.available) {
+    app.innerHTML = `<div class="card center"><h2>Admin není dostupný</h2><p class="muted">Na serveru chybí balík webauthn.</p></div>`;
+    return;
+  }
+  if (!state.hasKeys) {
+    app.innerHTML = `<div class="card center">
+      <h2 style="margin:0">Registrace klíče</h2>
+      <p class="muted" style="margin:0">Zatím není zaregistrovaný žádný klíč. Kód najdeš v logu serveru
+        (<code>docker logs rybky</code>).</p>
+      <input id="code" placeholder="Registrační kód (XXXX-XXXX-XXXX)" autocomplete="off">
+      <input id="name" placeholder="Název klíče, např. YubiKey" value="Hlavní klíč">
+      <button class="primary" id="go">Zaregistrovat klíč</button>
+      <div class="error" id="err"></div></div>`;
+    document.getElementById('go').onclick = async () => {
+      try { await registerKey(document.getElementById('code').value, document.getElementById('name').value); start(); }
+      catch (e) { document.getElementById('err').textContent = e.message; }
+    };
+    return;
+  }
+  app.innerHTML = `<div class="card center">
+    <h2 style="margin:0">Přihlášení</h2>
+    <p class="muted" style="margin:0">Zasuň hardwarový klíč a dotkni se ho.</p>
+    <button class="primary" id="go">Přihlásit klíčem</button>
+    <div class="error" id="err"></div></div>`;
+  document.getElementById('go').onclick = async () => {
+    try { await login(); start(); } catch (e) { document.getElementById('err').textContent = e.message; }
+  };
+}
+
+const TABS = [['prehled', 'Přehled'], ['hraci', 'Hráči'], ['samolepky', 'Samolepky'], ['ulovky', 'Úlovky'], ['klice', 'Klíče']];
+
+function render() {
+  logoutBtn.hidden = false;
+  const s = data.stats;
+  const nav = `<nav class="tabs">${TABS.map(([id, label]) => `<button data-tab="${id}" class="${tab === id ? 'active' : ''}">${label}</button>`).join('')}</nav>`;
+  let body = '';
+  if (tab === 'prehled') {
+    const tiles = [
+      [s.users, 'hráčů', `${s.usersWithPassword} s heslem`],
+      [s.stickers, 'samolepek na mapě'], [s.tattoos, 'tetování'], [s.objects, 'předmětů'],
+      [s.catches, 'úlovků', `${s.attempts} pokusů celkem`],
+      [s.refsPositive, 'vzorů „rybka“'], [s.refsNegative, 'vzorů „není rybka“'],
+    ];
+    body = `<div class="stats">${tiles.map(([v, l, sub]) => `<div class="card stat"><div class="value">${v}</div>
+      <div class="label">${l}${sub ? ` · ${sub}` : ''}</div></div>`).join('')}</div>`;
+  } else if (tab === 'hraci') {
+    body = `<div class="card table-wrap"><table><tr><th>Přezdívka</th><th>Body</th><th>Heslo</th><th></th><th>Samolepky</th><th>Úlovky</th><th>Od</th></tr>
+      ${data.users.map(u => `<tr><td><b>${esc(u.nick)}</b></td><td>${pts(u.points)}</td>
+        <td>${u.hasPassword ? '<span class="pill ok">nastavené</span>' : '<span class="pill warn">chybí</span>'}</td>
+        <td class="row">${u.hasPassword ? `<button data-act="reset_password" data-id="${u.id}" data-confirm="Hráč si nastaví nové heslo prvním přihlášením. Pokračovat?">Reset hesla</button>` : ''}
+          ${!u.stickers && !u.catches ? `<button class="danger" data-act="delete_user" data-id="${u.id}" data-confirm="Smazat prázdný účet ${esc(u.nick)}?">Smazat</button>` : ''}</td>
+        <td>${u.stickers}</td><td>${u.catches}</td><td class="muted">${when(u.created)}</td></tr>`).join('')}</table></div>`;
+  } else if (tab === 'samolepky') {
+    body = `<div class="grid">${data.stickers.map(st => `<div class="card item">
+      ${st.hasImage ? `<img loading="lazy" src="/admin/image/sticker/${st.id}" alt="">` : '<div class="noimg">bez fotky</div>'}
+      <h3>${esc(st.name || '(bez názvu)')}</h3>
+      <div class="row"><span class="pill">${ENV[st.env] || esc(st.env)}</span><span class="pill">${esc(st.fish)} · ${esc(st.rarity)}</span>
+        ${st.status === 'active' ? '<span class="pill ok">aktivní</span>' : '<span class="pill bad">vypnutá</span>'}</div>
+      <div class="muted">od ${esc(st.author)} · ${when(st.created)} · ulovena ${st.finds}×</div>
+      ${st.hint ? `<div>„${esc(st.hint)}“</div>` : ''}
+      ${st.lat != null ? `<a target="_blank" rel="noopener" href="https://mapy.com/?q=${st.lat},${st.lon}">${st.lat.toFixed(5)}, ${st.lon.toFixed(5)}</a>` : ''}
+      <div class="row">${st.status === 'active'
+        ? `<button data-act="sticker_lost" data-id="${st.id}">Vypnout</button>
+           <button class="danger" data-act="sticker_not_rybka" data-id="${st.id}" data-confirm="Vypnout samolepku a její fotku zařadit mezi „není rybka“?">Není rybka</button>`
+        : `<button data-act="sticker_restore" data-id="${st.id}">Zapnout</button>`}</div></div>`).join('') || '<p class="muted">Zatím nic.</p>'}</div>`;
+  } else if (tab === 'ulovky') {
+    body = `<div class="card table-wrap"><table><tr><th>Fotka</th><th>Kdo</th><th>Co</th><th>Výsledek</th><th>Shoda</th><th>Vzdálenost</th><th>Kdy</th><th></th></tr>
+      ${data.catches.map(c => `<tr>
+        <td>${c.hasImage ? `<a target="_blank" href="/admin/image/catch/${c.id}"><img class="small-thumb" loading="lazy" src="/admin/image/catch/${c.id}" alt=""></a>` : ''}</td>
+        <td>${esc(c.finder)}</td><td>${esc(c.sticker)} <span class="muted">· ${esc(c.fish)}</span></td>
+        <td>${c.negative ? '<span class="pill bad">není rybka</span>' : c.accepted ? `<span class="pill ok">uloveno +${pts(c.points)}</span>` : '<span class="pill">nepřijato</span>'}</td>
+        <td>${c.similarity != null ? Math.round(c.similarity * 100) + ' %' : ''}</td>
+        <td>${c.distance != null ? Math.round(c.distance) + ' m' : '—'}</td>
+        <td class="muted">${when(c.time)}</td>
+        <td>${c.accepted && !c.negative ? `<button class="danger" data-act="catch_not_rybka" data-id="${c.id}" data-confirm="Vzít body za úlovek a fotku zařadit mezi „není rybka“?">Není rybka</button>` : ''}</td></tr>`).join('')}</table></div>`;
+  } else if (tab === 'klice') {
+    body = `<div class="card" style="display:grid;gap:12px">
+      <table><tr><th>Název</th><th>Přidán</th><th></th></tr>
+      ${data.keys.map(k => `<tr><td>${esc(k.name)}</td><td class="muted">${when(k.created)}</td>
+        <td>${data.keys.length > 1 ? `<button class="danger" data-act="delete_key" data-id="${esc(k.id)}" data-confirm="Odebrat klíč ${esc(k.name)}?">Odebrat</button>` : ''}</td></tr>`).join('')}</table>
+      <div class="row"><input id="keyname" placeholder="Název záložního klíče" style="max-width:260px">
+        <button class="primary" id="addkey">Přidat další klíč</button></div>
+      <p class="muted" style="margin:0">Doporučení: zaregistruj i záložní klíč, ať se nezamkneš, když hlavní ztratíš.</p>
+      <div class="error" id="err"></div></div>`;
+  }
+  app.innerHTML = nav + body;
+  app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
+  app.querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
+    if (b.dataset.confirm && !confirm(b.dataset.confirm)) return;
+    b.disabled = true;
+    try { await api('action', {action: b.dataset.act, id: b.dataset.id}); await refresh(); }
+    catch (e) { alert(e.message); b.disabled = false; }
+  });
+  const add = document.getElementById('addkey');
+  if (add) add.onclick = async () => {
+    try { await registerKey('', document.getElementById('keyname').value); await refresh(); }
+    catch (e) { document.getElementById('err').textContent = e.message; }
+  };
+}
+
+async function refresh() {
+  data = await api('overview');
+  render();
+}
+
+async function start() {
+  try {
+    const state = await api('state');
+    if (state.loggedIn) await refresh(); else loginScreen(state);
+  } catch (e) {
+    app.innerHTML = `<div class="card center"><p class="error">${esc(e.message)}</p></div>`;
+  }
+}
+
+logoutBtn.onclick = async () => { await api('logout', {}); start(); };
+start();
+</script>
+</body>
+</html>

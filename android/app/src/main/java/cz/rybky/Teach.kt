@@ -69,7 +69,10 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 
 /** Vyfocená (nebo z galerie vybraná) samolepka. U fotky z galerie se souřadnice zadávají ručně. */
-private class Shot(val image: Bitmap, val embedding: FloatArray, val fromGallery: Boolean, val rybka: Float?)
+/** [embeddings] = otisky výřezů různé velikosti; [rybka] = výsledek kontroly „je to rybka“ (skóre, prošlo). */
+private class Shot(
+    val image: Bitmap, val embeddings: List<FloatArray>, val fromGallery: Boolean, val rybka: Pair<Float, Boolean>?,
+)
 
 /**
  * Nalepení: kamera přes celou obrazovku, po vyfocení vyjede panel s názvem, prostředím a polohou.
@@ -80,13 +83,13 @@ fun TeachScreen(api: Api, embedder: Embedder) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snapshot = remember { CameraSnapshot() }
-    val latest = remember { AtomicReference<FloatArray?>(null) }
+    val latest = remember { AtomicReference<List<FloatArray>?>(null) }
     var shot by remember { mutableStateOf<Shot?>(null) }
     var done by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val form = remember { StickerForm() }
     var rybka by remember { mutableStateOf<Rybka?>(null) }
-    var score by remember { mutableStateOf<Float?>(null) }
+    var score by remember { mutableStateOf<Pair<Float, Boolean>?>(null) }
     LaunchedEffect(Unit) { runCatching { loadRybka(api) }.onSuccess { rybka = it } }
 
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -94,8 +97,8 @@ fun TeachScreen(api: Api, embedder: Embedder) {
             runCatching {
                 withContext(Dispatchers.Default) {
                     val photo = loadPhoto(context, uri)
-                    val emb = embedder.embed(photo)
-                    Shot(photo, emb, true, rybka?.similarity(emb))
+                    val crops = embedder.embedCrops(photo)
+                    Shot(photo, crops, true, rybka?.check(crops))
                 }
             }.onSuccess { shot = it }.onFailure { error = "Fotku se nepodařilo načíst" }
         }
@@ -120,13 +123,13 @@ fun TeachScreen(api: Api, embedder: Embedder) {
         val s = shot
         if (s == null) {
             CameraView(Modifier.fillMaxSize(), snapshot) { frame ->
-                val emb = embedder.embed(frame)
-                latest.set(emb)
-                score = rybka?.similarity(emb)
+                val crops = embedder.embedCrops(frame)
+                latest.set(crops)
+                score = rybka?.check(crops)
             }
             val recognized = rybka.recognizes(score)
             val r = rybka
-            val sc = score
+            val sc = score?.first
             AimSquare(if (recognized) Amber else Color.White)
             Text(
                 error ?: when {
@@ -153,11 +156,11 @@ fun TeachScreen(api: Api, embedder: Embedder) {
                     Modifier.size(80.dp).border(4.dp, Color.White, CircleShape).padding(8.dp)
                         .clip(CircleShape).background(Color.White)
                         .clickable {
-                            val emb = latest.get()
+                            val crops = latest.get()
                             val image = snapshot.take()
-                            if (emb != null && image != null) {
+                            if (crops != null && image != null) {
                                 error = null
-                                shot = Shot(image, emb, false, score)
+                                shot = Shot(image, crops, false, score)
                             }
                         },
                 )
@@ -192,6 +195,7 @@ private fun StickerSheet(
     var error by remember { mutableStateOf<String?>(null) }
     val manualFix = parseCoords(form.coords)
     val tattoo = form.env == TATTOO
+    val portable = isPortable(form.env)
     val recognized = rybka.recognizes(shot.rybka)
 
     LaunchedEffect(Unit) {
@@ -207,10 +211,13 @@ private fun StickerSheet(
             Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(if (tattoo) "Nové tetování" else "Nová rybka", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text(
+                when (form.env) { TATTOO -> "Nové tetování"; OBJECT -> "Nový předmět s rybkou"; else -> "Nová rybka" },
+                fontSize = 24.sp, fontWeight = FontWeight.Bold,
+            )
             if (!recognized) Text(
-                "Na fotce nevidím rybku z Rybek" + (shot.rybka?.let { " (shoda ${(it * 100).toInt()} %)" } ?: "") +
-                    ". Vyfoť samolepku nebo tetování zblízka.",
+                "Na fotce nevidím rybku z Rybek" + (shot.rybka?.let { " (shoda ${(it.first * 100).toInt()} %)" } ?: "") +
+                    ". Vyfoť ji zblízka.",
                 color = MaterialTheme.colorScheme.error,
             )
             Text("Kde samolepka visí?", fontWeight = FontWeight.Bold)
@@ -226,17 +233,20 @@ private fun StickerSheet(
             }
             OutlinedTextField(
                 form.name, { form.name = it.take(40) },
-                label = { Text(if (tattoo) "Jméno osoby" else "Název") },
-                placeholder = { Text(if (tattoo) "Kdo tetování nosí" else "Např. U lávky") },
+                label = { Text(when (form.env) { TATTOO -> "Jméno osoby"; OBJECT -> "Co to je"; else -> "Název" }) },
+                placeholder = {
+                    Text(when (form.env) { TATTOO -> "Kdo tetování nosí"; OBJECT -> "Např. hrnek u Edy"; else -> "Např. U lávky" })
+                },
                 singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 form.hint, { form.hint = it.take(120) },
-                label = { Text(if (tattoo) "Kde ho potkáš (nepovinné)" else "Nápověda pro hledače (nepovinná)") },
+                label = { Text(if (portable) "Kde ho potkáš (nepovinné)" else "Nápověda pro hledače (nepovinná)") },
                 singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
             )
-            if (tattoo) Text(
-                "Tetování nemá polohu ani není na mapě – ulovit ho jde kdekoli, kde člověka potkáš.",
+            if (portable) Text(
+                if (tattoo) "Tetování nemá polohu ani není na mapě – ulovit ho jde kdekoli, kde člověka potkáš."
+                else "Předmět nemá polohu ani není na mapě. Úlovek je za půl bodu.",
                 fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             ) else if (shot.fromGallery) OutlinedTextField(
                 form.coords, { form.coords = it },
@@ -274,17 +284,18 @@ private fun StickerSheet(
                         scope.launch {
                             runCatching {
                                 val f = when {
-                                    tattoo -> null
+                                    portable -> null
                                     shot.fromGallery -> manualFix!!
                                     else -> currentFix(context).also { fix = it }
                                 }
-                                api.createSticker(form.name.trim(), form.env!!, form.hint, f, listOf(shot.embedding))
+                                val photo = withContext(Dispatchers.Default) { shot.image.jpegBase64() }
+                                api.createSticker(form.name.trim(), form.env!!, form.hint, f, shot.embeddings, photo)
                             }.onSuccess(onDone).onFailure { error = it.message }
                             busy = false
                         }
                     },
                     enabled = !busy && recognized && form.name.trim().length >= 2 && form.env != null &&
-                        (tattoo || !shot.fromGallery || manualFix != null),
+                        (portable || !shot.fromGallery || manualFix != null),
                     modifier = Modifier.weight(2f).height(52.dp),
                 ) {
                     Icon(Icons.Outlined.AddLocationAlt, null)

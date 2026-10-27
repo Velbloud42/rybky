@@ -12,6 +12,7 @@ import android.graphics.RectF
 import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.net.Uri
+import android.util.Base64
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -33,11 +34,18 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.imageembedder.ImageEmbedder
 import kotlinx.coroutines.tasks.await
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.math.sqrt
 
 /** Část obrazu uprostřed, ve které má být samolepka (zaměřovací čtverec v náhledu). */
-const val AIM_FRACTION = 0.6f
+const val AIM_FRACTION = 0.65f
+
+/**
+ * Výřezy ze středu snímku, ze kterých se počítají otisky. Víc velikostí najednou → samolepka se pozná
+ * zblízka i z dálky, nemusí přesně vyplnit zaměřovací čtverec.
+ */
+val CROP_FRACTIONS = listOf(0.45f, AIM_FRACTION, 0.9f)
 
 /** Udělá z obrázku „otisk“ – vektor, který je podobný pro podobné obrázky. */
 class Embedder(context: Context) : AutoCloseable {
@@ -55,6 +63,9 @@ class Embedder(context: Context) : AutoCloseable {
         embedder.embed(BitmapImageBuilder(bitmap).build())
             .embeddingResult().embeddings()[0].floatEmbedding()
 
+    /** Otisky všech výřezů [CROP_FRACTIONS] čtvercového snímku. */
+    fun embedCrops(square: Bitmap): List<FloatArray> = CROP_FRACTIONS.map { embed(centerCrop(square, it)) }
+
     override fun close() = embedder.close()
 }
 
@@ -66,15 +77,34 @@ fun cosine(a: FloatArray, b: FloatArray): Float {
     return if (na > 0 && nb > 0) dot / (sqrt(na) * sqrt(nb)) else 0f
 }
 
-/** Umožní zvenku vzít snímek toho, co je právě v náhledu (v plném rozlišení displeje). */
+/** Nejlepší shoda mezi otisky výřezů snímku a otisky samolepky: (shoda, otisk výřezu, který ji dal). */
+fun bestMatch(crops: List<FloatArray>, shots: List<FloatArray>): Pair<Float, FloatArray> =
+    crops.map { c -> shots.maxOf { cosine(c, it) } to c }.maxBy { it.first }
+
+/** Čtverec ze středu obrázku o velikosti [fraction] kratší strany. */
+fun centerCrop(bitmap: Bitmap, fraction: Float = 1f): Bitmap {
+    val side = (minOf(bitmap.width, bitmap.height) * fraction).toInt()
+    return Bitmap.createBitmap(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side)
+}
+
+/** Fotka pro server: čtverec ze středu, nejvýš [maxSide] px, JPEG v base64. */
+fun Bitmap.jpegBase64(maxSide: Int = 720): String {
+    val square = centerCrop(this)
+    val scaled = if (square.width > maxSide) Bitmap.createScaledBitmap(square, maxSide, maxSide, true) else square
+    val out = ByteArrayOutputStream()
+    scaled.compress(Bitmap.CompressFormat.JPEG, 82, out)
+    return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+}
+
+/** Umožní zvenku vzít snímek toho, co je právě v náhledu (v plném rozlišení displeje). Jen z UI vlákna. */
 class CameraSnapshot {
     internal var view: PreviewView? = null
     fun take(): Bitmap? = view?.bitmap
 }
 
 /**
- * Živý náhled zadní kamery. [onFrame] dostává zhruba 4× za vteřinu výřez ze zaměřovacího
- * čtverce (už otočený správně) – volá se na pozadí, ne v UI vlákně.
+ * Živý náhled zadní kamery. [onFrame] dostává zhruba 4× za vteřinu čtverec ze středu snímku
+ * (už otočený správně) – volá se na pozadí, ne v UI vlákně.
  */
 @Composable
 fun CameraView(modifier: Modifier = Modifier, snapshot: CameraSnapshot? = null, onFrame: (Bitmap) -> Unit) {
@@ -100,7 +130,7 @@ fun CameraView(modifier: Modifier = Modifier, snapshot: CameraSnapshot? = null, 
                     val now = System.currentTimeMillis()
                     if (now - lastFrame < 250) return@use
                     lastFrame = now
-                    frameCallback.value(aimCrop(it.toBitmap(), it.imageInfo.rotationDegrees))
+                    frameCallback.value(squareFrame(it.toBitmap(), it.imageInfo.rotationDegrees))
                 }
             }
             provider.unbindAll()
@@ -116,9 +146,9 @@ fun CameraView(modifier: Modifier = Modifier, snapshot: CameraSnapshot? = null, 
     AndroidView(factory = { previewView }, modifier = modifier)
 }
 
-/** Čtvercový výřez ze středu snímku, otočený tak, jak ho vidí uživatel. */
-private fun aimCrop(frame: Bitmap, rotation: Int): Bitmap {
-    val side = (minOf(frame.width, frame.height) * AIM_FRACTION).toInt()
+/** Čtverec ze středu snímku, otočený tak, jak ho vidí uživatel. */
+private fun squareFrame(frame: Bitmap, rotation: Int): Bitmap {
+    val side = minOf(frame.width, frame.height)
     val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
     return Bitmap.createBitmap(
         frame, (frame.width - side) / 2, (frame.height - side) / 2, side, side, matrix, true,

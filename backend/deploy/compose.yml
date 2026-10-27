@@ -1,15 +1,21 @@
 # Rybky backend na malině. Lokálně http://192.168.1.13:8090, zvenku přes Cloudflare tunel.
+# Vedle tohohle souboru musí ležet server.py, admin.py a admin.html.
 services:
   rybky:
-    image: python:3.13-alpine
+    build: .
+    image: rybky-backend
     container_name: rybky
     restart: unless-stopped
     command: python -u /app/server.py 8000
     environment:
       - RYBKY_DB=/data/rybky.db
+      - ADMIN_RP_ID=rybky.pravn.uk
+      - ADMIN_ORIGIN=https://rybky.pravn.uk
     ports:
       - "8090:8000"
     volumes:
       - ./server.py:/app/server.py:ro
+      - ./admin.py:/app/admin.py:ro
+      - ./admin.html:/app/admin.html:ro
       - ./data:/data
-    mem_limit: 128m
+    mem_limit: 192m

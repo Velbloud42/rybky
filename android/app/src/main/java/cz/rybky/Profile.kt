@@ -1,5 +1,9 @@
 package cz.rybky
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.LruCache
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +33,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.material.icons.outlined.AddLocationAlt
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Brush
+import androidx.compose.material.icons.outlined.LocalCafe
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Diamond
 import androidx.compose.material.icons.outlined.EmojiEvents
@@ -53,7 +58,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -79,6 +89,7 @@ private val METRIC_ICONS = mapOf(
     "stickers" to Icons.Outlined.AddLocationAlt,
     "best_sticker" to Icons.Outlined.Favorite,
     "tattoos" to Icons.Outlined.Brush,
+    "objects" to Icons.Outlined.LocalCafe,
 )
 
 /** Profil: úroveň a záložky Akvárium / Atlas ryb / Úspěchy / Moje samolepky. */
@@ -125,7 +136,11 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
                     if (fish.isEmpty()) item { Text("Akvárium je zatím prázdné. Jdi na lov!") }
                     items(fish) { f ->
                         ProfileItem(
-                            icon = { Icon(Icons.Outlined.SetMeal, null, tint = rarityColor(f.getString("rarity"))) },
+                            icon = {
+                                if (f.optBoolean("catchImage")) {
+                                    RemoteImage(api, "/api/images/catch/${f.getInt("catchId")}", Modifier.size(56.dp))
+                                } else Icon(Icons.Outlined.SetMeal, null, tint = rarityColor(f.getString("rarity")))
+                            },
                             title = f.getString("fish"),
                             subtitle = "${f.getString("rarity")} · „${f.optString("name")}“ od ${f.getString("author")}",
                         )
@@ -148,7 +163,7 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
                                 )
                             },
                             title = f.getString("name"),
-                            subtitle = "${f.getString("rarity")} · ${f.getString("envName")} · ${f.getInt("points")} b." +
+                            subtitle = "${f.getString("rarity")} · ${f.getString("envName")} · ${formatPoints(f.getDouble("points"))} b." +
                                 " · ve hře ${f.getInt("inWorld")}×",
                             trailing = if (caught > 0) "${caught}×" else "—",
                             dimmed = caught == 0,
@@ -162,7 +177,9 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
                     items(stickers) { s ->
                         ProfileItem(
                             icon = {
-                                Icon(ENV_ICONS[s.optString("env")] ?: Icons.Outlined.Place, null, tint = MaterialTheme.colorScheme.primary)
+                                if (s.optBoolean("image")) {
+                                    RemoteImage(api, "/api/images/sticker/${s.getString("id")}", Modifier.size(56.dp))
+                                } else Icon(ENV_ICONS[s.optString("env")] ?: Icons.Outlined.Place, null, tint = MaterialTheme.colorScheme.primary)
                             },
                             title = s.optString("name").ifEmpty { s.getString("fish") },
                             subtitle = "${s.getString("fish")} · ${s.optString("envName")}" +
@@ -176,12 +193,28 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
     }
 }
 
+/** Fotky ze serveru si pamatuje, ať se při přepínání záložek nestahují znovu. */
+private val imageCache = LruCache<String, Bitmap>(40)
+
+/** Fotka ze serveru (úlovek, vlastní samolepka) se zaoblenými rohy. */
+@Composable
+fun RemoteImage(api: Api, path: String, modifier: Modifier = Modifier) {
+    val bitmap by produceState(imageCache.get(path), path) {
+        if (value == null) runCatching {
+            withContext(Dispatchers.Default) { api.image(path).let { BitmapFactory.decodeByteArray(it, 0, it.size) } }
+        }.getOrNull()?.let { imageCache.put(path, it); value = it }
+    }
+    Box(modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+        bitmap?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+    }
+}
+
 @Composable
 private fun LevelHeader(m: JSONObject, onLogout: () -> Unit) {
     val level = m.getJSONObject("level")
     val start = level.getInt("levelStart")
     val next = level.getInt("nextLevel")
-    val points = level.getInt("points")
+    val points = level.getDouble("points")
     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
@@ -198,11 +231,11 @@ private fun LevelHeader(m: JSONObject, onLogout: () -> Unit) {
             Text(level.getString("title"), color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(6.dp))
             LinearProgressIndicator(
-                progress = { (points - start).toFloat() / (next - start) },
+                progress = { ((points - start) / (next - start)).toFloat() },
                 modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
             )
             Text(
-                "$points b. · do další úrovně ${next - points} b.",
+                "${formatPoints(points)} b. · do další úrovně ${formatPoints(next - points)} b.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

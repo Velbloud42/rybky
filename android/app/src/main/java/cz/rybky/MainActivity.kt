@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddLocationAlt
 import androidx.compose.material.icons.outlined.Brush
+import androidx.compose.material.icons.outlined.LocalCafe
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Landscape
@@ -99,29 +100,43 @@ val ENV_ICONS = mapOf(
     "uvnitr" to Icons.Outlined.Home,
     "vrchol" to Icons.Outlined.Landscape,
     "tetovani" to Icons.Outlined.Brush,
+    "predmet" to Icons.Outlined.LocalCafe,
 )
 
 /**
- * Galerie vzorů „takhle vypadá rybka“ ze serveru a hranice, od které fotka projde.
+ * Galerie vzorů ze serveru: „takhle vypadá rybka“ (positives) a „tohle rybka není“ (negatives, označuje admin).
  * Prvních [learningTarget] samolepek se nekontroluje – server se z nich teprve učí.
  */
 class Rybka(
-    val embeddings: List<FloatArray>, val minSimilarity: Float,
+    val positives: List<FloatArray>, val negatives: List<FloatArray>, val minSimilarity: Float,
     val learning: Boolean, val learned: Int, val learningTarget: Int,
 ) {
-    fun similarity(e: FloatArray) = embeddings.maxOfOrNull { cosine(e, it) }
+    /** Skóre nejlepšího výřezu a jestli prošel: dost podobný rybce a víc než čemukoli, co rybka není. */
+    fun check(crops: List<FloatArray>): Pair<Float, Boolean>? {
+        if (positives.isEmpty()) return null
+        return crops.map { c ->
+            val pos = positives.maxOf { cosine(c, it) }
+            val neg = negatives.maxOfOrNull { cosine(c, it) } ?: -1f
+            pos to (pos >= minSimilarity && pos > neg)
+        }.maxWith(compareBy({ it.second }, { it.first }))
+    }
 }
 
 /** Dokud galerie vzorů není (nebo se nenačetla), nic se neblokuje – rozhodne server. */
-fun Rybka?.recognizes(score: Float?) = this == null || learning || score == null || score >= minSimilarity
+fun Rybka?.recognizes(check: Pair<Float, Boolean>?) = this == null || learning || check == null || check.second
 
 const val TATTOO = "tetovani"
+const val OBJECT = "predmet"
+
+/** Tetování a předměty nemají polohu – nosí se s sebou a loví se kdekoli. */
+fun isPortable(env: String?) = env == TATTOO || env == OBJECT
 
 suspend fun loadRybka(api: Api): Rybka {
     val r = api.references()
     val list = r.getJSONArray("embeddings")
     return Rybka(
-        (0 until list.length()).map { list.getJSONArray(it).toFloatArray() },
+        list.toEmbeddings(),
+        r.optJSONArray("negatives")?.toEmbeddings().orEmpty(),
         r.getDouble("minSimilarity").toFloat(),
         r.optBoolean("learning"), r.optInt("learned"), r.optInt("learningTarget"),
     )
@@ -283,9 +298,14 @@ fun LoginScreen(api: Api, onLoggedIn: (String) -> Unit) {
 // --- lov: živá kamera rozpoznává samolepky v okolí -----------------------
 
 private class Candidate(
-    val id: String, val embeddings: List<FloatArray>, val tattoo: Boolean, val name: String?, val minSimilarity: Float,
+    val id: String, val embeddings: List<FloatArray>, val kind: String, val name: String?, val minSimilarity: Float,
 ) {
-    val label get() = if (tattoo) "Tetování · $name" else "Samolepka"
+    val portable get() = isPortable(kind)
+    val label get() = when (kind) {
+        TATTOO -> "Tetování · $name"
+        OBJECT -> "Předmět · $name"
+        else -> "Samolepka"
+    }
 }
 
 @Composable
@@ -301,6 +321,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
     var result by remember { mutableStateOf<JSONObject?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
+    val snapshot = remember { CameraSnapshot() }
 
     LaunchedEffect(reload) {
         error = null
@@ -314,8 +335,8 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                     val shots = o.getJSONArray("embeddings")
                     Candidate(
                         o.getString("id"),
-                        (0 until shots.length()).map { shots.getJSONArray(it).toFloatArray() },
-                        o.optBoolean("tattoo"),
+                        shots.toEmbeddings(),
+                        o.optString("kind").ifEmpty { if (o.optBoolean("tattoo")) TATTOO else "sticker" },
                         o.optString("name").ifEmpty { null },
                         o.optDouble("minSimilarity", MIN_SIMILARITY.toDouble()).toFloat(),
                     )
@@ -324,23 +345,27 @@ fun HuntScreen(api: Api, embedder: Embedder) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        CameraView(Modifier.fillMaxSize()) { frame ->
+        CameraView(Modifier.fillMaxSize(), snapshot) { frame ->
             val list = candidates ?: return@CameraView
             if (busy || result != null) return@CameraView
-            val emb = embedder.embed(frame)
-            // Každá samolepka má vlastní hranici (tetování mírnější), vybírá se ta, která ji přesahuje nejvíc.
-            val best = list.map { c -> c to c.embeddings.maxOf { cosine(emb, it) } }
-                .maxByOrNull { (c, sim) -> sim - c.minSimilarity }
-            similarity = best?.second ?: 0f
+            val crops = embedder.embedCrops(frame)
+            // Každá samolepka má vlastní hranici (tetování a předměty mírnější), vybírá se ta, která ji
+            // přesahuje nejvíc; u každé se bere nejlepší z výřezů snímku.
+            val best = list.map { c -> c to bestMatch(crops, c.embeddings) }
+                .maxByOrNull { (c, match) -> match.first - c.minSimilarity }
+            similarity = best?.second?.first ?: 0f
             bestMatch = best?.first
-            val passes = best != null && best.second >= best.first.minSimilarity
+            val passes = best != null && best.second.first >= best.first.minSimilarity
             streak = if (passes) streak + 1 else 0
             val f = fix
             if (best != null && f != null && streak >= MATCH_STREAK) {
                 busy = true
                 streak = 0
                 scope.launch {
-                    runCatching { api.scan(best.first.id, f, emb) }
+                    runCatching {
+                        val photo = snapshot.take()?.let { withContext(Dispatchers.Default) { it.jpegBase64() } }
+                        api.scan(best.first.id, f, best.second.second, photo)
+                    }
                         .onSuccess { result = it }
                         .onFailure { error = it.message }
                     busy = false
@@ -368,9 +393,10 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                 }
                 else -> Panel {
                     Text("Zaměř samolepku do čtverce", fontWeight = FontWeight.Bold)
-                    val tattoos = candidates!!.count { it.tattoo }
+                    val portable = candidates!!.count { it.portable }
                     Text(
-                        "Rybek v okolí: ${candidates!!.size - tattoos}" + if (tattoos > 0) " · tetování k ulovení: $tattoos" else "",
+                        "Rybek v okolí: ${candidates!!.size - portable}" +
+                            if (portable > 0) " · tetování a předmětů: $portable" else "",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
@@ -386,7 +412,10 @@ fun HuntScreen(api: Api, embedder: Embedder) {
 private fun CatchResult(res: JSONObject, onContinue: () -> Unit) {
     Text(res.getString("message"), fontSize = 18.sp, fontWeight = FontWeight.Bold)
     if (res.optString("result") == "caught") {
-        Text("+${res.getInt("points")} bodů", color = MaterialTheme.colorScheme.primary, fontSize = 18.sp)
+        Text(
+            "+${res.optString("pointsText").ifEmpty { formatPoints(res.getDouble("points")) }} b.",
+            color = MaterialTheme.colorScheme.primary, fontSize = 18.sp,
+        )
         val level = res.getJSONObject("level")
         if (res.optBoolean("levelUp")) {
             Text(
