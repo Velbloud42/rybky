@@ -1,0 +1,15 @@
+# Rybky backend na malině. Lokálně http://192.168.1.13:8090, zvenku přes Cloudflare tunel.
+services:
+  rybky:
+    image: python:3.13-alpine
+    container_name: rybky
+    restart: unless-stopped
+    command: python -u /app/server.py 8000
+    environment:
+      - RYBKY_DB=/data/rybky.db
+    ports:
+      - "8090:8000"
+    volumes:
+      - ./server.py:/app/server.py:ro
+      - ./data:/data
+    mem_limit: 128m

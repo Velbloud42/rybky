@@ -1,0 +1,16 @@
+# Build a IDE
+build/
+.gradle/
+.kotlin/
+.idea/
+*.iml
+captures/
+
+# Lokální nastavení a tajné údaje (Mapy.com klíč, podepisovací klíč)
+local.properties
+*.jks
+*.keystore
+
+# Data backendu
+*.db
+__pycache__/
