@@ -196,12 +196,28 @@ fun referenceImages(context: Context): List<Bitmap> {
     }
 }
 
-/** „50.0755, 14.4378“ i „50.0755N 14.4378E“ (formát z Mapy.com). */
+/** Jedna souřadnice: stupně (i záporné), volitelně minuty a vteřiny a světová strana. */
+private val COORD = Regex("""(-?\d+(?:\.\d+)?)\s*°?\s*(?:(\d+(?:\.\d+)?)\s*['′]\s*)?(?:(\d+(?:\.\d+)?)\s*["″]\s*)?([NSEWnsew])?""")
+
+/**
+ * Souřadnice napsané nebo zkopírované z map: „50.0755, 14.4378“, „37.8016N, 8.7974W“ (Mapy.com),
+ * „37.8016° N, 8.7974° W“ i „37°48'05.8"N 8°47'50.6"W“ (Google). S a W jsou záporné.
+ */
 fun parseCoords(text: String): Fix? {
-    val m = Regex("""(-?\d+(?:[.]\d+)?)\s*[NS]?\s*[,; ]\s*(-?\d+(?:[.]\d+)?)\s*[EW]?""").find(text.trim())
-        ?: return null
-    val lat = m.groupValues[1].toDouble()
-    val lon = m.groupValues[2].toDouble()
+    val parts = COORD.findAll(text).map { m ->
+        val (deg, min, sec, side) = m.destructured
+        val value = deg.toDouble().let { d ->
+            val abs = kotlin.math.abs(d) + (min.toDoubleOrNull() ?: 0.0) / 60 + (sec.toDoubleOrNull() ?: 0.0) / 3600
+            if (d < 0 || deg.startsWith("-")) -abs else abs
+        }
+        val hemisphere = side.uppercase()
+        (if (hemisphere == "S" || hemisphere == "W") -kotlin.math.abs(value) else value) to hemisphere
+    }.toList()
+    if (parts.size != 2) return null
+    // Kdyby někdo napsal nejdřív délku (E/W) a pak šířku (N/S), prohodit.
+    val (lat, lon) = if (parts[0].second in setOf("E", "W") && parts[1].second in setOf("N", "S")) {
+        parts[1].first to parts[0].first
+    } else parts[0].first to parts[1].first
     return if (lat in -90.0..90.0 && lon in -180.0..180.0) Fix(lat, lon, 0f) else null
 }
 

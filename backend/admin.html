@@ -67,6 +67,9 @@ const app = document.getElementById('app');
 const logoutBtn = document.getElementById('logout');
 let data = null;
 let tab = 'prehled';
+// Registrační kód jde předat v adrese (#code=…); hned se z ní smaže, ať nezůstane v historii.
+const setupCode = new URLSearchParams(location.hash.slice(1)).get('code') || '';
+if (location.hash) history.replaceState(null, '', location.pathname);
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 const when = t => t ? new Date(t * 1000).toLocaleString('cs-CZ', {dateStyle: 'short', timeStyle: 'short'}) : '';
@@ -129,8 +132,10 @@ function loginScreen(state) {
       <h2 style="margin:0">Registrace klíče</h2>
       <p class="muted" style="margin:0">Zatím není zaregistrovaný žádný klíč. Kód najdeš v logu serveru
         (<code>docker logs rybky</code>).</p>
-      <input id="code" placeholder="Registrační kód (XXXX-XXXX-XXXX)" autocomplete="off">
+      <input id="code" placeholder="Registrační kód (XXXX-XXXX-XXXX)" autocomplete="off" value="${esc(setupCode)}">
       <input id="name" placeholder="Název klíče, např. YubiKey" value="Hlavní klíč">
+      <p class="muted" style="margin:0">Zasuň YubiKey, klikni na tlačítko a až začne blikat, dotkni se ho.
+        Zaregistrovat jde jen jeden klíč – potom se registrace zavře.</p>
       <button class="primary" id="go">Zaregistrovat klíč</button>
       <div class="error" id="err"></div></div>`;
     document.getElementById('go').onclick = async () => {
@@ -197,13 +202,10 @@ function render() {
         <td>${c.accepted && !c.negative ? `<button class="danger" data-act="catch_not_rybka" data-id="${c.id}" data-confirm="Vzít body za úlovek a fotku zařadit mezi „není rybka“?">Není rybka</button>` : ''}</td></tr>`).join('')}</table></div>`;
   } else if (tab === 'klice') {
     body = `<div class="card" style="display:grid;gap:12px">
-      <table><tr><th>Název</th><th>Přidán</th><th></th></tr>
-      ${data.keys.map(k => `<tr><td>${esc(k.name)}</td><td class="muted">${when(k.created)}</td>
-        <td>${data.keys.length > 1 ? `<button class="danger" data-act="delete_key" data-id="${esc(k.id)}" data-confirm="Odebrat klíč ${esc(k.name)}?">Odebrat</button>` : ''}</td></tr>`).join('')}</table>
-      <div class="row"><input id="keyname" placeholder="Název záložního klíče" style="max-width:260px">
-        <button class="primary" id="addkey">Přidat další klíč</button></div>
-      <p class="muted" style="margin:0">Doporučení: zaregistruj i záložní klíč, ať se nezamkneš, když hlavní ztratíš.</p>
-      <div class="error" id="err"></div></div>`;
+      <table><tr><th>Název</th><th>Přidán</th></tr>
+      ${data.keys.map(k => `<tr><td>${esc(k.name)}</td><td class="muted">${when(k.created)}</td></tr>`).join('')}</table>
+      <p class="muted" style="margin:0">Registrace je zavřená, další klíč přidat nejde. Když klíč ztratíš, je potřeba
+        na serveru smazat záznam v tabulce admin_keys a restartovat ho – v logu pak bude nový registrační kód.</p></div>`;
   }
   app.innerHTML = nav + body;
   app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; render(); });
@@ -213,11 +215,6 @@ function render() {
     try { await api('action', {action: b.dataset.act, id: b.dataset.id}); await refresh(); }
     catch (e) { alert(e.message); b.disabled = false; }
   });
-  const add = document.getElementById('addkey');
-  if (add) add.onclick = async () => {
-    try { await registerKey('', document.getElementById('keyname').value); await refresh(); }
-    catch (e) { document.getElementById('err').textContent = e.message; }
-  };
 }
 
 async function refresh() {

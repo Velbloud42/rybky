@@ -757,13 +757,14 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         return Raw("image/jpeg", (IMAGES_DIR / row["image"]).read_bytes(), {"Cache-Control": "private, max-age=86400"})
 
     def map(self):
+        """Všechny samolepky na světě (kruhy s posunutým středem). Volitelně jen do `radius` metrů."""
         u = self.user()
         try:
             lat, lon = float(self.query["lat"]), float(self.query["lon"])
         except (KeyError, ValueError):
             raise ApiError(400, "Chybí poloha")
         try:
-            radius = min(float(self.query.get("radius", 3000)), 20000)
+            radius = float(self.query["radius"]) if "radius" in self.query else math.inf
         except ValueError:
             raise ApiError(400, "Neplatný poloměr")
         rows = self.conn.execute(

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MyLocation
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.ZoomOutMap
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -47,6 +48,7 @@ import org.json.JSONObject
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.MapTileIndex
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
@@ -168,6 +170,9 @@ fun MapScreen(api: Api) {
             SmallFloatingActionButton(onClick = {
                 fix?.let { mapView.controller.animateTo(GeoPoint(it.lat, it.lon)) }
             }) { Icon(Icons.Outlined.MyLocation, "Moje poloha") }
+            SmallFloatingActionButton(onClick = { zoomToAll(mapView, items.orEmpty(), fix) }) {
+                Icon(Icons.Outlined.ZoomOutMap, "Všechny rybky")
+            }
             SmallFloatingActionButton(onClick = { reload++ }) { Icon(Icons.Outlined.Refresh, "Obnovit") }
         }
 
@@ -182,7 +187,7 @@ fun MapScreen(api: Api) {
                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 }
                 selected != null -> StickerCard(selected!!) { selected = null }
-                items!!.isEmpty() -> Panel { Text("Do 3 km tu nic není. Nalep první rybku!") }
+                items!!.isEmpty() -> Panel { Text("Zatím nikde žádná rybka. Nalep první!") }
             }
         }
     }
@@ -205,7 +210,7 @@ private fun StickerCard(s: JSONObject, onClose: () -> Unit) {
             }
             IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Zavřít") }
         }
-        Text("~${s.getInt("distance")} m na ${compass(s.getInt("bearing"))} · nalepil(a) ${s.getString("author")}")
+        Text("~${formatDistance(s.getInt("distance"))} na ${compass(s.getInt("bearing"))} · nalepil(a) ${s.getString("author")}")
         if (!s.isNull("hint")) Text("„${s.getString("hint")}“", modifier = Modifier.padding(top = 4.dp))
         when {
             s.getBoolean("own") -> Text("Tvoje samolepka", color = MaterialTheme.colorScheme.primary)
@@ -230,6 +235,23 @@ private fun locationDot(context: Context, color: Int): Bitmap {
         paint.color = color
         canvas.drawCircle(r, r, r - 4 * density, paint)
     }
+}
+
+/** Oddálí mapu tak, aby byly vidět všechny samolepky (a moje poloha). */
+private fun zoomToAll(mapView: MapView, items: List<JSONObject>, fix: Fix?) {
+    val points = items.map { GeoPoint(it.getDouble("lat"), it.getDouble("lon")) } +
+        listOfNotNull(fix?.let { GeoPoint(it.lat, it.lon) })
+    when (points.size) {
+        0 -> return
+        1 -> mapView.controller.animateTo(points[0], 15.0, 600L)
+        else -> mapView.zoomToBoundingBox(BoundingBox.fromGeoPoints(points).increaseByScale(1.4f), true, 80)
+    }
+}
+
+private fun formatDistance(meters: Int) = when {
+    meters < 1000 -> "$meters m"
+    meters < 10_000 -> String.format(java.util.Locale.forLanguageTag("cs"), "%.1f km", meters / 1000.0)
+    else -> "%,d km".format(java.util.Locale.forLanguageTag("cs"), meters / 1000)
 }
 
 fun compass(bearing: Int) =

@@ -1,8 +1,9 @@
 """Admin dashboard Rybek na /admin, přístupný jen s hardwarovým klíčem (WebAuthn / FIDO2).
 
-První klíč se zaregistruje jednorázovým kódem, který server vypíše do logu při startu (dokud žádný
-klíč není). Další klíče jde přidat jen po přihlášení. Synchronizované passkeys (telefon, správce
-hesel) se odmítají – projde jen klíč vázaný na jedno zařízení.
+Klíč je jen jeden: zaregistruje se jednorázovým kódem, který server vypíše do logu při startu
+(dokud žádný klíč není), a pak se registrace natrvalo zavře. Synchronizované passkeys (telefon,
+správce hesel) se odmítají – projde jen klíč vázaný na jedno zařízení.
+Ztracený klíč: smazat řádek z tabulky admin_keys a restartovat server → v logu bude nový kód.
 
 Potřebuje balík `webauthn`; bez něj zbytek serveru funguje, jen admin hlásí, že není dostupný.
 """
@@ -184,7 +185,7 @@ class AdminMixin:
         data = self.body()
         keys = self._keys()
         if keys:
-            self._require_session()
+            raise AdminError(403, "Klíč už je zaregistrovaný, další přidat nejde")
         else:
             code = str(data.get("code") or "").strip().upper()
             with _lock:
@@ -337,10 +338,6 @@ class AdminMixin:
             conn.execute("UPDATE refs SET negative = 1 WHERE origin = ?", (f"sticker:{ident}",))
         elif action == "catch_not_rybka":
             self._revoke_catch(int(ident))
-        elif action == "delete_key":
-            if len(self._keys()) <= 1:
-                raise AdminError(409, "Poslední klíč smazat nejde")
-            conn.execute("DELETE FROM admin_keys WHERE id = ?", (ident,))
         else:
             raise AdminError(400, "Neznámá akce")
         return {"ok": True}
