@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from collections import Counter
 from datetime import datetime
@@ -32,10 +33,10 @@ DB_PATH = Path(os.environ.get("RYBKY_DB") or Path(__file__).with_name("rybky.db"
 IMAGES_DIR = DB_PATH.parent / "images"
 # Úvodní stránka /intro a její obrázky.
 WEB_DIR = Path(__file__).with_name("web")
-# Odkud se stahuje aplikace: nejnovější vydání na GitHubu (zjišťuje se nejvýš jednou za RELEASE_TTL).
+# Odkud se stahuje aplikace: nejnovější vydání na GitHubu (zjišťuje se nejvýš jednou za RELEASE_TTL vteřin).
 GITHUB_REPO = os.environ.get("RYBKY_GITHUB", "Velbloud42/rybky")
 RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
-RELEASE_TTL = 600
+RELEASE_TTL = 5
 MAX_BODY = 3_000_000
 MAX_IMAGE = 1_500_000
 
@@ -655,35 +656,42 @@ def redirect(url):
     return Raw("text/plain; charset=utf-8", b"", {"Location": url, "Cache-Control": "no-cache"}, status=302)
 
 
-_release = {"data": None, "checked": 0.0}
+_release = {"data": None, "etag": None, "next": 0.0}
 _release_lock = threading.Lock()
 
 
 def latest_release():
-    """Nejnovější vydání z GitHubu: verze, datum, odkaz na APK, velikost a novinky. Pamatuje si ho
-    RELEASE_TTL vteřin; když GitHub neodpovídá, vrátí poslední známé (nebo None) a zkusí to za minutu."""
+    """Nejnovější vydání z GitHubu: verze, datum, odkaz na APK, velikost a novinky. Ptá se nejvýš jednou
+    za RELEASE_TTL vteřin, a to podmíněně (ETag) – odpověď „nic nového“ se GitHubu nepočítá do limitu
+    60 dotazů za hodinu. Když GitHub neodpovídá nebo odmítne, vrátí poslední známé a zkusí to za minutu."""
     with _release_lock:
-        if time.time() - _release["checked"] < RELEASE_TTL:
+        if time.time() < _release["next"]:
             return _release["data"]
-    data = None
+        etag = _release["etag"]
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "rybky-server"}
+    if etag:
+        headers["If-None-Match"] = etag
+    data, wait = None, RELEASE_TTL
     try:
-        request = urllib.request.Request(
-            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "rybky-server"},
-        )
+        request = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest", headers=headers)
         with urllib.request.urlopen(request, timeout=5) as response:
             r = json.load(response)
+            etag = response.headers.get("ETag")
         apk = next((a for a in r.get("assets", []) if a["name"].endswith(".apk")), None)
         data = {"version": r["tag_name"].lstrip("v"), "published": r["published_at"], "notes": r.get("body") or "",
                 "url": apk["browser_download_url"] if apk else r["html_url"],
                 "file": apk["name"] if apk else None, "size": apk["size"] if apk else None}
+    except urllib.error.HTTPError as e:
+        if e.code != 304:  # 304 = beze změny
+            print(f"GitHub: nejnovější verzi nejde zjistit: {e!r}", flush=True)
+            wait = 60
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"GitHub: nejnovější verzi nejde zjistit: {e!r}", flush=True)
+        wait = 60
     with _release_lock:
         if data:
-            _release.update(data=data, checked=time.time())
-        else:
-            _release["checked"] = time.time() - RELEASE_TTL + 60
+            _release.update(data=data, etag=etag)
+        _release["next"] = time.time() + wait
         return _release["data"]
 
 
@@ -853,7 +861,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         page = (WEB_DIR / "intro.html").read_text(encoding="utf-8")
         for key, value in values.items():
             page = page.replace("{{" + key + "}}", value)
-        return Raw("text/html; charset=utf-8", page.encode(), {"Cache-Control": "public, max-age=300"})
+        return Raw("text/html; charset=utf-8", page.encode(), {"Cache-Control": "no-cache"})
 
     # --- endpointy ------------------------------------------------------
 
