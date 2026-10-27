@@ -13,6 +13,7 @@ import android.graphics.ImageDecoder
 import android.graphics.Matrix
 import android.net.Uri
 import android.util.Base64
+import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -60,15 +61,24 @@ class Embedder(context: Context) : AutoCloseable {
             .build(),
     )
 
+    private var closed = false
+
     @Synchronized // kamera i galerie můžou chtít otisk zároveň
-    fun embed(bitmap: Bitmap): FloatArray =
-        embedder.embed(BitmapImageBuilder(bitmap).build())
+    fun embed(bitmap: Bitmap): FloatArray {
+        // Kamera může poslat poslední snímek i po zavření obrazovky – pak už model neběží.
+        check(!closed) { "Embedder je zavřený" }
+        return embedder.embed(BitmapImageBuilder(bitmap).build())
             .embeddingResult().embeddings()[0].floatEmbedding()
+    }
 
     /** Otisky všech výřezů [CROP_FRACTIONS] čtvercového snímku. */
     fun embedCrops(square: Bitmap): List<FloatArray> = CROP_FRACTIONS.map { embed(centerCrop(square, it)) }
 
-    override fun close() = embedder.close()
+    @Synchronized
+    override fun close() {
+        closed = true
+        embedder.close()
+    }
 }
 
 fun cosine(a: FloatArray, b: FloatArray): Float {
@@ -132,7 +142,12 @@ fun CameraView(modifier: Modifier = Modifier, snapshot: CameraSnapshot? = null, 
                     val now = System.currentTimeMillis()
                     if (now - lastFrame < 250) return@use
                     lastFrame = now
-                    frameCallback.value(squareFrame(it.toBitmap(), it.imageInfo.rotationDegrees))
+                    // Chyba v jednom snímku (např. po zavření obrazovky) nesmí shodit aplikaci.
+                    try {
+                        frameCallback.value(squareFrame(it.toBitmap(), it.imageInfo.rotationDegrees))
+                    } catch (e: Exception) {
+                        Log.w("Rybky", "Snímek z kamery se nepodařilo zpracovat", e)
+                    }
                 }
             }
             provider.unbindAll()
