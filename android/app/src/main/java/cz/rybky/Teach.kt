@@ -82,6 +82,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -129,6 +130,8 @@ private class PhotoEdit(val photo: Bitmap) {
 
     /** Dvěma prsty: přiblížení a otočení kolem bodu mezi prsty, k tomu posun. */
     fun transform(centroid: Offset, pan: Offset, zoom: Float, degrees: Float) {
+        // Při zvednutí prstů střed gesta neexistuje (NaN) – s ním by fotka „zmizela“ do černa.
+        if (!centroid.isSpecified || zoom.isNaN() || degrees.isNaN()) return
         val newScale = (scale * zoom).coerceIn(0.3f, 10f)
         val mid = Offset(area.width / 2f, area.height / 2f)
         val rad = Math.toRadians(degrees.toDouble())
