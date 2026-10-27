@@ -251,6 +251,17 @@ def parse_embedding(value):
         raise ApiError(400, "Neplatný otisk obrázku")
 
 
+def finders_by_sticker(conn):
+    """Kdo už kterou rybku ulovil (přezdívky v pořadí úlovků)."""
+    out = {}
+    for r in conn.execute(
+        """SELECT c.sticker_id, u.nick FROM catches c JOIN users u ON u.id = c.finder_id
+           WHERE c.accepted = 1 ORDER BY c.time"""
+    ):
+        out.setdefault(r["sticker_id"], []).append(r["nick"])
+    return out
+
+
 def catch_points(env, rarity):
     return OBJECT_POINTS if env == OBJECT else RARITY_POINTS[rarity]
 
@@ -546,6 +557,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                FROM stickers s WHERE s.author_id = ? ORDER BY s.created DESC""",
             (u["id"],),
         ).fetchall()
+        finders = finders_by_sticker(self.conn)
         return {
             "nick": u["nick"],
             "hasPassword": u["password"] is not None,
@@ -556,7 +568,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                 {**sticker_json(r), "author": r["author"], "caught": r["caught"],
                  "catchId": r["catch_id"], "catchImage": bool(r["catch_image"])} for r in aquarium
             ],
-            "stickers": [{**sticker_json(r), "finds": r["finds"]} for r in mine],
+            "stickers": [{**sticker_json(r), "finds": r["finds"], "finders": finders.get(r["id"], [])} for r in mine],
         }
 
     def environments(self):
@@ -774,6 +786,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                WHERE s.status = 'active' AND s.lat IS NOT NULL""",
             (u["id"],),
         ).fetchall()
+        finders = finders_by_sticker(self.conn)
         out = []
         for r in rows:
             clat, clon = fuzzed_center(r["id"], r["lat"], r["lon"])
@@ -798,6 +811,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                 "hint": r["hint"],
                 "author": r["author"],
                 "caught": bool(r["caught"]),
+                "finders": finders.get(r["id"], []),
                 "own": own,
             })
         out.sort(key=lambda x: x["distance"])

@@ -281,6 +281,12 @@ private fun StickerCard(s: JSONObject, onClose: () -> Unit) {
         }
         Text("~${formatDistance(s.getInt("distance"))} na ${compass(s.getInt("bearing"))} · nalepil(a) ${s.getString("author")}")
         if (!s.isNull("hint")) Text("„${s.getString("hint")}“", modifier = Modifier.padding(top = 4.dp))
+        val finders = s.optJSONArray("finders")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+        Text(
+            if (finders.isEmpty()) "Zatím ji nikdo neulovil" else "Ulovili: ${finders.joinToString(", ")}",
+            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
         when {
             s.getBoolean("own") -> Text("Tvoje samolepka", color = MaterialTheme.colorScheme.primary)
             s.getBoolean("caught") -> Text("Už ji máš v akváriu", color = MaterialTheme.colorScheme.primary)

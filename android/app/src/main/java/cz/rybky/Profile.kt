@@ -184,7 +184,9 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
                             title = s.optString("name").ifEmpty { s.getString("fish") },
                             subtitle = "${s.getString("fish")} · ${s.optString("envName")}" +
                                 if (!s.isNull("hint")) " · „${s.getString("hint")}“" else "",
-                            trailing = "${s.getInt("finds")}× ulovena",
+                            trailing = "${s.getInt("finds")}×",
+                            footer = s.optJSONArray("finders")?.let { a -> (0 until a.length()).map { a.getString(it) } }
+                                ?.takeIf { it.isNotEmpty() }?.let { "Ulovili: ${it.joinToString(", ")}" },
                         )
                     }
                 }
@@ -321,13 +323,19 @@ private fun ProfileItem(
     subtitle: String,
     trailing: String? = null,
     dimmed: Boolean = false,
+    footer: String? = null,
 ) {
     val alpha = if (dimmed) 0.55f else 1f
     ListItem(
         headlineContent = {
             Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha))
         },
-        supportingContent = { Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)) },
+        supportingContent = {
+            Column {
+                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha))
+                footer?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
+            }
+        },
         leadingContent = icon,
         trailingContent = trailing?.let { { Text(it, fontWeight = FontWeight.Bold) } },
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),

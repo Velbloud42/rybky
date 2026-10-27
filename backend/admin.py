@@ -58,6 +58,26 @@ def configure(db, images_dir, catch_points, author_points):
             print(f"Admin: kód pro registraci prvního klíče na {ORIGIN}/admin: {code}", flush=True)
 
 
+# Jedna souřadnice: stupně, volitelně minuty a vteřiny a světová strana (S a W jsou záporné).
+COORD = re.compile(r"""(-?\d+(?:\.\d+)?)\s*°?\s*(?:(\d+(?:\.\d+)?)\s*['′]\s*)?(?:(\d+(?:\.\d+)?)\s*["″]\s*)?([NSEWnsew])?""")
+
+
+def parse_coords(text):
+    """„50.0755, 14.4378“, „37.8016N, 8.7974W“ i „37°48'05.8"N 8°47'50.6"W“ → (lat, lon), nebo None."""
+    parts = []
+    for deg, minutes, seconds, side in COORD.findall(text):
+        value = abs(float(deg)) + float(minutes or 0) / 60 + float(seconds or 0) / 3600
+        if deg.startswith("-") or side.upper() in ("S", "W"):
+            value = -value
+        parts.append((value, side.upper()))
+    if len(parts) != 2:
+        return None
+    (lat, first), (lon, second) = parts
+    if first in ("E", "W") and second in ("N", "S"):
+        lat, lon = lon, lat
+    return (lat, lon) if -90 <= lat <= 90 and -180 <= lon <= 180 else None
+
+
 def b64u(data):
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
@@ -295,7 +315,9 @@ class AdminMixin:
                           FROM users u ORDER BY u.points DESC, u.created"""),
             "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.rarity, s.status, s.hint, s.lat, s.lon, s.created,
                                     s.image IS NOT NULL AS hasImage, a.nick AS author,
-                                    (SELECT COUNT(*) FROM catches c WHERE c.sticker_id = s.id AND c.accepted = 1) AS finds
+                                    (SELECT COUNT(*) FROM catches c WHERE c.sticker_id = s.id AND c.accepted = 1) AS finds,
+                                    (SELECT GROUP_CONCAT(u.nick, ', ') FROM catches c JOIN users u ON u.id = c.finder_id
+                                     WHERE c.sticker_id = s.id AND c.accepted = 1) AS finders
                              FROM stickers s JOIN users a ON a.id = s.author_id ORDER BY s.created DESC"""),
             "catches": q("""SELECT c.id, c.time, c.accepted, c.similarity, c.distance, c.points,
                                    c.image IS NOT NULL AS hasImage, u.nick AS finder, s.name AS sticker, s.env, s.fish,
@@ -332,6 +354,16 @@ class AdminMixin:
         elif action in ("sticker_lost", "sticker_restore"):
             conn.execute("UPDATE stickers SET status = ? WHERE id = ?",
                          ("lost" if action == "sticker_lost" else "active", ident))
+        elif action == "set_position":
+            sticker = conn.execute("SELECT env, lat FROM stickers WHERE id = ?", (ident,)).fetchone()
+            if not sticker:
+                raise AdminError(404, "Samolepka neexistuje")
+            if sticker["lat"] is None:
+                raise AdminError(409, "Tetování a předměty polohu nemají")
+            position = parse_coords(str(data.get("coords") or ""))
+            if not position:
+                raise AdminError(400, "Nerozumím souřadnicím. Zkus třeba 50.0755, 14.4378")
+            conn.execute("UPDATE stickers SET lat = ?, lon = ?, accuracy = 0 WHERE id = ?", (*position, ident))
         elif action == "sticker_not_rybka":
             # Vypnout samolepku a její fotky přesunout mezi negativní vzory.
             conn.execute("UPDATE stickers SET status = 'lost' WHERE id = ?", (ident,))
