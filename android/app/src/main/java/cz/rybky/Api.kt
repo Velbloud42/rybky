@@ -23,6 +23,11 @@ class Api(var token: String?) {
 
     suspend fun me(): JSONObject = call("GET", "/api/me") as JSONObject
 
+    /** Mění jen poslané klíče: nick, motto, avatar (JPEG v base64, "" = smazat), password, showcase. Vrací nové me(). */
+    suspend fun updateProfile(changes: JSONObject): JSONObject = call("POST", "/api/profile", changes) as JSONObject
+
+    suspend fun leaderboard(): JSONObject = call("GET", "/api/leaderboard") as JSONObject
+
     suspend fun environments(): JSONArray = call("GET", "/api/environments") as JSONArray
 
     suspend fun fish(): JSONArray = call("GET", "/api/fish") as JSONArray
@@ -101,6 +106,9 @@ data class Fix(val lat: Double, val lon: Double, val accuracy: Float) {
 }
 
 private fun FloatArray.toJson() = JSONArray(map { Math.round(it * 10000) / 10000.0 })
+
+/** Řetězec, nebo null, když chybí nebo je JSON null (optString by vrátil "null"). */
+fun JSONObject.str(key: String): String? = if (isNull(key)) null else getString(key)
 
 fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 

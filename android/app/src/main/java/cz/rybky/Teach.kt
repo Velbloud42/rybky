@@ -120,6 +120,7 @@ fun TeachScreen(api: Api, embedder: Embedder) {
             )
             Spacer(Modifier.height(16.dp))
             FishReveal(
+                name = sticker.str("fishName"),
                 fish = sticker.getString("fish"),
                 rarity = sticker.getString("rarity"),
                 envName = sticker.optString("envName").ifEmpty { null },

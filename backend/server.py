@@ -15,9 +15,12 @@ import secrets
 import sqlite3
 import sys
 import time
+from collections import Counter
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import admin
 
@@ -47,6 +50,7 @@ LEARNING_STICKERS = 10
 
 RARITY_WEIGHT = {"běžná": 60, "nevšední": 25, "vzácná": 12, "legendární": 3}
 RARITY_POINTS = {"běžná": 10, "nevšední": 20, "vzácná": 40, "legendární": 100}
+RARITIES = list(RARITY_POINTS)
 AUTHOR_POINTS = 5
 # Rybka na hrnku nebo tričku je drobnost: za úlovek jen půl bodu, autor nedostane nic.
 OBJECT_POINTS = 0.5
@@ -71,10 +75,26 @@ FISH = {
     "mesto": [("Městská sardinka", "běžná"), ("Tramvajová plotice", "nevšední"), ("Kanálový sumec", "vzácná")],
     "uvnitr": [("Gupka", "běžná"), ("Neonka", "nevšední"), ("Skalára", "vzácná")],
     "vrchol": [("Horská slunka", "nevšední"), ("Létající ryba", "legendární")],
-    "tetovani": [("Inkoustová rybka", "nevšední"), ("Tetovaný kapr", "vzácná"), ("Živá legenda", "legendární")],
+    "tetovani": [("Kérková rybka", "běžná"), ("Inkoustová rybka", "nevšední"), ("Tetovaný kapr", "vzácná"),
+                 ("Živá legenda", "legendární")],
     "predmet": [("Hrnková rybka", "běžná"), ("Tričková ryba", "běžná"), ("Plechovková sardinka", "nevšední"),
                 ("Klíčenková rybka", "vzácná")],
 }
+
+# Každá rybka má navíc vlastní jméno, které žádná jiná nemá: přívlastek + jméno („Ospalý Ferda“, „Mlsná Jarmila“).
+FISH_NAMES = {
+    "ý": ["Ferda", "Bohouš", "Pepík", "Venca", "Bořek", "Ludvík", "Matěj", "Kuba", "Jarda", "Mirek", "Otík",
+          "Vašek", "Čenda", "Bedřich", "Hubert", "Kazimír", "Rudla", "Štěpán", "Toník", "Vilém", "Zdeněk",
+          "Šimon", "Prokop", "Radovan", "Leoš", "Emil", "Oskar", "Hugo", "Maxík", "Ignác"],
+    "á": ["Jarmila", "Máňa", "Božena", "Žofka", "Ludmila", "Bára", "Dáša", "Eliška", "Hedvika", "Irena",
+          "Kamila", "Liduška", "Magda", "Nela", "Olga", "Pavla", "Růžena", "Stáňa", "Vlasta", "Zdena", "Agáta",
+          "Berta", "Cecílie", "Dorota", "Ema", "Fanynka", "Hela", "Klotylda", "Matylda", "Žaneta"],
+}
+# Kmeny přívlastků, koncovka (ý/á) podle rodu jména.
+FISH_ADJECTIVES = ["Ospal", "Mlsn", "Rychl", "Moudr", "Tich", "Blázniv", "Zlatoploutv", "Šupinat", "Kulat",
+                   "Bublinkov", "Stříbrn", "Toulav", "Zvědav", "Vesel", "Mrzut", "Odvážn", "Lín", "Hladov",
+                   "Nebojácn", "Tajemn", "Nafoukl", "Leskl", "Pruhovan", "Puntíkat", "Ukecan", "Skromn", "Slavn",
+                   "Neposedn", "Duhov", "Kouzeln"]
 
 ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
@@ -82,22 +102,52 @@ ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 LEVEL_STEP = 50
 LEVEL_TITLES = ["Jikra", "Plůdek", "Rybička", "Rybář", "Zkušený rybář", "Mistr rybář", "Kapitán", "Vodník"]
 
-# (id, název, popis, metrika ze user_stats, cíl)
+# Úlovky se do dnů a hodin (noční rybář, ranní ptáče…) počítají podle českého času.
+try:
+    LOCAL_TZ = ZoneInfo("Europe/Prague")
+except ZoneInfoNotFoundError:
+    LOCAL_TZ = None  # místní čas serveru
+FAR_KM = 100
+
+# (id, název, popis, metrika ze user_stats, cíl, vzácnost)
 ACHIEVEMENTS = [
-    ("prvni_ulovek", "První úlovek", "Ulov svou první rybu", "catches", 1),
-    ("rybar", "Rybář", "Ulov 10 ryb", "catches", 10),
-    ("mistr_rybar", "Mistr rybář", "Ulov 50 ryb", "catches", 50),
-    ("sberatel", "Sběratel", "Ulov 5 různých druhů", "species", 5),
-    ("atlas", "Kompletní atlas", "Ulov všechny druhy ryb", "species", sum(len(v) for v in FISH.values())),
-    ("vzacny_kus", "Vzácný kus", "Ulov vzácnou nebo legendární rybu", "rare", 1),
-    ("legenda", "Legenda", "Ulov legendární rybu", "legendary", 1),
-    ("cestovatel", "Cestovatel", "Ulov rybu ve všech prostředích", "envs", len(ENVIRONMENTS)),
-    ("inkoust", "Lovec inkoustu", "Ulov rybu z tetování", "tattoos", 1),
-    ("drobnosti", "Sběratel drobností", "Ulov 10 rybek na předmětech", "objects", 10),
-    ("lepic", "Lepič", "Nalep první samolepku", "stickers", 1),
-    ("pilny_lepic", "Pilný lepič", "Nalep 10 samolepek", "stickers", 10),
-    ("oblibene_misto", "Oblíbené místo", "Tvoji samolepku ulovilo 5 lidí", "best_sticker", 5),
+    ("prvni_ulovek", "První úlovek", "Ulov svou první rybu", "catches", 1, "běžná"),
+    ("rybar", "Rybář", "Ulov 10 ryb", "catches", 10, "běžná"),
+    ("mistr_rybar", "Mistr rybář", "Ulov 50 ryb", "catches", 50, "vzácná"),
+    ("stovka", "Stovka", "Ulov 100 ryb", "catches", 100, "legendární"),
+    ("sberatel", "Sběratel", "Ulov 5 různých druhů", "species", 5, "běžná"),
+    ("znalec", "Znalec", "Ulov 15 různých druhů", "species", 15, "vzácná"),
+    ("atlas", "Kompletní atlas", "Ulov všechny druhy ryb", "species", sum(len(v) for v in FISH.values()), "legendární"),
+    ("vzacny_kus", "Vzácný kus", "Ulov vzácnou nebo legendární rybu", "rare", 1, "nevšední"),
+    ("legenda", "Legenda", "Ulov legendární rybu", "legendary", 1, "vzácná"),
+    ("lovec_legend", "Lovec legend", "Ulov 3 legendární ryby", "legendary", 3, "legendární"),
+    ("cestovatel", "Cestovatel", "Ulov rybu ve všech prostředích", "envs", len(ENVIRONMENTS), "vzácná"),
+    ("svetobeznik", "Světoběžník", f"Ulov dvě ryby aspoň {FAR_KM} km od sebe", "far", FAR_KM, "vzácná"),
+    ("inkoust", "Lovec inkoustu", "Ulov rybu z tetování", "tattoos", 1, "nevšední"),
+    ("galerie", "Galerie na kůži", "Ulov 5 ryb z tetování", "tattoos", 5, "vzácná"),
+    ("drobnosti", "Sběratel drobností", "Ulov 10 rybek na předmětech", "objects", 10, "nevšední"),
+    ("pruzkopnik", "Průkopník", "Ulov rybu jako první ze všech", "first_finds", 1, "nevšední"),
+    ("objevitel", "Objevitel", "Ulov 10 ryb jako první ze všech", "first_finds", 10, "vzácná"),
+    ("spolecensky", "Společenská ryba", "Ulov rybky od 5 různých autorů", "authors", 5, "nevšední"),
+    ("nocni_rybar", "Noční rybář", "Ulov rybu mezi 22. a 4. hodinou", "night", 1, "nevšední"),
+    ("ranni_ptace", "Ranní ptáče", "Ulov rybu mezi 5. a 8. hodinou ráno", "morning", 1, "nevšední"),
+    ("rybarsky_den", "Rybářský den", "Ulov 5 ryb za jeden den", "best_day", 5, "vzácná"),
+    ("vytrvalec", "Vytrvalec", "Ulov rybu v 7 různých dnech", "days", 7, "nevšední"),
+    ("tisicovka", "Tisícovka", "Nasbírej 1000 bodů", "points", 1000, "legendární"),
+    ("lepic", "Lepič", "Nalep první samolepku", "stickers", 1, "běžná"),
+    ("pilny_lepic", "Pilný lepič", "Nalep 10 samolepek", "stickers", 10, "nevšední"),
+    ("mistr_lepic", "Mistr lepič", "Nalep 25 samolepek", "stickers", 25, "vzácná"),
+    ("oblibene_misto", "Oblíbené místo", "Tvoji samolepku ulovilo 5 lidí", "best_sticker", 5, "nevšední"),
+    ("atrakce", "Turistická atrakce", "Tvoji samolepku ulovilo 10 lidí", "best_sticker", 10, "vzácná"),
+    ("oblibeny_autor", "Oblíbený autor", "Tvoje rybky někdo ulovil celkem 25×", "fans", 25, "vzácná"),
+    ("nova_tvar", "Nová tvář", "Nastav si profilovou fotku", "avatar", 1, "běžná"),
 ]
+ACHIEVEMENT_IDS = {a[0] for a in ACHIEVEMENTS}
+# Odznak = úspěch z posledních tří vzácností. Vedle jména se vystavují nejvýš tři.
+BADGE_RARITIES = RARITIES[1:]
+SHOWCASE_SIZE = 3
+LEADERBOARD_SIZE = 10
+MOTTO_MAX = 60
 
 
 def db():
@@ -152,10 +202,23 @@ def init_db():
             );
             CREATE UNIQUE INDEX IF NOT EXISTS one_catch
                 ON catches(sticker_id, finder_id) WHERE accepted = 1;
+            -- Kdy hráč který úspěch poprvé splnil (vedle jména se vystavují nejnovější odznaky).
+            CREATE TABLE IF NOT EXISTS unlocks (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                achievement TEXT NOT NULL,
+                time REAL NOT NULL,
+                PRIMARY KEY (user_id, achievement)
+            );
             """
         )
         add_column(conn, "stickers", "name", "TEXT")
         add_column(conn, "stickers", "image", "TEXT")
+        add_column(conn, "stickers", "fish_name", "TEXT")
+        add_column(conn, "users", "avatar", "TEXT")
+        add_column(conn, "users", "motto", "TEXT")
+        add_column(conn, "users", "showcase", "TEXT")  # JSON seznam vybraných odznaků, NULL = poslední tři
+        fix_fish(conn)
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS stickers_fish_name ON stickers(fish_name)")
         add_column(conn, "catches", "similarity", "REAL")
         add_column(conn, "catches", "points", "REAL")
         add_column(conn, "catches", "image", "TEXT")
@@ -179,8 +242,46 @@ def add_column(conn, table, column, decl):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
+def fix_fish(conn):
+    """Srovná rybky s katalogem: vzácnost podle druhu (druh, který v prostředí už není, se vylosuje znovu)
+    a každé, která ještě nemá jméno, vymyslí nové."""
+    catalog = {(env, name): rarity for env, options in FISH.items() for name, rarity in options}
+    for r in conn.execute("SELECT id, env, fish, rarity, fish_name FROM stickers").fetchall():
+        fish, rarity = r["fish"], catalog.get((r["env"], r["fish"]))
+        if rarity is None:
+            fish, rarity = pick_fish(r["env"])
+        name = r["fish_name"] or new_fish_name(conn)
+        if (fish, rarity, name) != (r["fish"], r["rarity"], r["fish_name"]):
+            conn.execute("UPDATE stickers SET fish = ?, rarity = ?, fish_name = ? WHERE id = ?",
+                         (fish, rarity, name, r["id"]))
+
+
+def new_fish_name(conn):
+    """Jméno, které ještě žádná rybka nemá. Dokud to jde, nové ryby nesdílí ani přívlastek, ani křestní jméno."""
+    taken = {r[0] for r in conn.execute("SELECT fish_name FROM stickers WHERE fish_name IS NOT NULL")}
+    used_words = {w.rstrip("ýá") for n in taken for w in n.split()[:2]}
+    for attempt in range(200):
+        ending = random.choice(list(FISH_NAMES))
+        adjective, first = random.choice(FISH_ADJECTIVES), random.choice(FISH_NAMES[ending])
+        name = f"{adjective}{ending} {first}"
+        fresh = adjective not in used_words and first.rstrip("ýá") not in used_words
+        if name not in taken and (fresh or attempt >= 100):
+            return name
+    n = 2
+    while f"{name} {n}." in taken:
+        n += 1
+    return f"{name} {n}."
+
+
 def nick_key(nick):
     return nick.strip().casefold()
+
+
+def valid_nick(data):
+    nick = str(data.get("nick", "")).strip()
+    if not 3 <= len(nick) <= 20:
+        raise ApiError(400, "Přezdívka musí mít 3 až 20 znaků")
+    return nick
 
 
 def merge_duplicate_nicks(conn):
@@ -295,16 +396,21 @@ def level_info(points):
 
 def user_stats(conn, uid):
     caught = conn.execute(
-        """SELECT s.fish, s.rarity, s.env FROM catches c JOIN stickers s ON s.id = c.sticker_id
+        """SELECT s.fish, s.rarity, s.env, s.author_id, c.time, c.lat, c.lon,
+                  c.time = (SELECT MIN(c2.time) FROM catches c2 WHERE c2.sticker_id = c.sticker_id AND c2.accepted = 1) AS first
+           FROM catches c JOIN stickers s ON s.id = c.sticker_id
            WHERE c.finder_id = ? AND c.accepted = 1""",
         (uid,),
     ).fetchall()
+    user = conn.execute("SELECT points, avatar FROM users WHERE id = ?", (uid,)).fetchone()
     stickers = conn.execute("SELECT COUNT(*) FROM stickers WHERE author_id = ?", (uid,)).fetchone()[0]
-    best = conn.execute(
-        """SELECT MAX(n) FROM (SELECT COUNT(*) AS n FROM catches c JOIN stickers s ON s.id = c.sticker_id
+    best, fans = conn.execute(
+        """SELECT MAX(n), SUM(n) FROM (SELECT COUNT(*) AS n FROM catches c JOIN stickers s ON s.id = c.sticker_id
            WHERE s.author_id = ? AND c.accepted = 1 GROUP BY s.id)""",
         (uid,),
-    ).fetchone()[0]
+    ).fetchone()
+    times = [datetime.fromtimestamp(r["time"], LOCAL_TZ) for r in caught]
+    days = Counter(t.date() for t in times)
     return {
         "catches": len(caught),
         "species": len({r["fish"] for r in caught}),
@@ -313,17 +419,84 @@ def user_stats(conn, uid):
         "envs": len({r["env"] for r in caught}),
         "tattoos": sum(r["env"] == TATTOO for r in caught),
         "objects": sum(r["env"] == OBJECT for r in caught),
+        "first_finds": sum(r["first"] for r in caught),
+        "authors": len({r["author_id"] for r in caught}),
+        "night": sum(t.hour >= 22 or t.hour < 4 for t in times),
+        "morning": sum(5 <= t.hour < 8 for t in times),
+        "days": len(days),
+        "best_day": max(days.values(), default=0),
+        "far": farthest_km([(r["lat"], r["lon"]) for r in caught if r["lat"] is not None]),
+        "points": int(user["points"]),
+        "avatar": int(bool(user["avatar"])),
         "stickers": stickers,
         "best_sticker": best or 0,
+        "fans": fans or 0,
     }
 
 
-def achievements(stats):
+def farthest_km(places):
+    """Největší vzdálenost dvou úlovků v km (stačí zjistit, jestli přesáhne FAR_KM)."""
+    best = 0.0
+    for i, a in enumerate(places):
+        for b in places[i + 1:]:
+            best = max(best, distance_m(*a, *b) / 1000)
+            if best >= FAR_KM:
+                return FAR_KM
+    return int(best)
+
+
+def achievements(stats, unlocked_at=None):
+    unlocked_at = unlocked_at or {}
     return [
-        {"id": aid, "name": name, "description": desc, "metric": metric,
-         "progress": min(stats[metric], target), "target": target, "unlocked": stats[metric] >= target}
-        for aid, name, desc, metric, target in ACHIEVEMENTS
+        {"id": aid, "name": name, "description": desc, "metric": metric, "rarity": rarity,
+         "badge": rarity in BADGE_RARITIES, "progress": min(stats[metric], target), "target": target,
+         "unlocked": stats[metric] >= target, "unlockedAt": unlocked_at.get(aid)}
+        for aid, name, desc, metric, target, rarity in ACHIEVEMENTS
     ]
+
+
+def record_unlocks(conn, uid, stats):
+    """Zapíše čas, kdy hráč úspěch poprvé splnil. Vrací {id úspěchu: čas}."""
+    known = dict(conn.execute("SELECT achievement, time FROM unlocks WHERE user_id = ?", (uid,)).fetchall())
+    now = time.time()
+    for aid, _, _, metric, target, _ in ACHIEVEMENTS:
+        if aid not in known and stats[metric] >= target:
+            conn.execute("INSERT OR IGNORE INTO unlocks (user_id, achievement, time) VALUES (?, ?, ?)", (uid, aid, now))
+            known[aid] = now
+    return known
+
+
+def showcase(achs, chosen):
+    """Odznaky vedle jména: ty, které si hráč vybral, jinak poslední tři získané (při shodě vzácnější)."""
+    earned = {a["id"]: a for a in achs if a["unlocked"] and a["badge"]}
+    if chosen is not None:
+        picked = [earned[i] for i in json.loads(chosen) if i in earned]
+    else:
+        picked = sorted(earned.values(), key=lambda a: (a["unlockedAt"] or 0, RARITIES.index(a["rarity"])), reverse=True)
+    return [{k: a[k] for k in ("id", "name", "description", "metric", "rarity")} for a in picked[:SHOWCASE_SIZE]]
+
+
+def avatar_path(user):
+    # Jméno souboru se při každé změně fotky mění, takže ?v= stačí na obejití cache v telefonu.
+    return f"/api/images/avatar/{user['id']}?v={user['avatar'][:-4]}" if user["avatar"] else None
+
+
+def player_json(conn, user, with_achievements=False):
+    """Veřejný profil hráče: úroveň, motto, profilovka, odznaky a pár čísel."""
+    stats = user_stats(conn, user["id"])
+    achs = achievements(stats, record_unlocks(conn, user["id"], stats))
+    badges = showcase(achs, user["showcase"])
+    out = {
+        "nick": user["nick"], "motto": user["motto"], "avatar": avatar_path(user),
+        "points": user["points"], "pointsText": fmt_points(user["points"]), "level": level_info(user["points"]),
+        "badges": badges, "badgeCount": sum(a["unlocked"] and a["badge"] for a in achs),
+        "catches": stats["catches"], "species": stats["species"], "stickers": stats["stickers"],
+    }
+    if with_achievements:
+        shown = {b["id"] for b in badges}
+        out["achievements"] = [{**a, "showcased": a["id"] in shown} for a in achs]
+        out["showcaseAuto"] = user["showcase"] is None
+    return out
 
 
 def rybka_check(conn, embeddings):
@@ -359,9 +532,9 @@ def rounded(embedding):
     return [round(x, 4) for x in embedding]
 
 
-def save_image(data, name):
+def save_image(data, name, key="image"):
     """Uloží JPEG poslaný jako base64; vrátí jméno souboru, nebo None, když žádný nepřišel."""
-    raw = data.get("image")
+    raw = data.get(key)
     if not raw:
         return None
     try:
@@ -392,6 +565,7 @@ def sticker_json(row, include_location=False):
         "name": row["name"],
         "status": row["status"],
         "fish": row["fish"],
+        "fishName": row["fish_name"],
         "rarity": row["rarity"],
         "env": row["env"],
         "envName": ENVIRONMENTS.get(row["env"]),
@@ -415,7 +589,7 @@ class Raw:
 
 
 class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
-    server_version = "Rybky/0.3"
+    server_version = "Rybky/0.10"
     open_db = staticmethod(lambda: db())
 
     # --- infrastruktura -------------------------------------------------
@@ -435,6 +609,8 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             ("POST", r"/api/login$", self.login),
             ("POST", r"/api/password$", self.set_password),
             ("GET", r"/api/me$", self.me),
+            ("POST", r"/api/profile$", self.update_profile),
+            ("GET", r"/api/leaderboard$", self.leaderboard),
             ("GET", r"/api/environments$", self.environments),
             ("GET", r"/api/fish$", self.fish_atlas),
             ("GET", r"/api/references$", self.references),
@@ -443,7 +619,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             ("GET", r"/api/nearby$", self.nearby),
             ("POST", r"/api/scan$", self.scan),
             ("GET", r"/api/map$", self.map),
-            ("GET", r"/api/images/(catch|sticker)/(\w+)$", self.image),
+            ("GET", r"/api/images/(catch|sticker|avatar)/(\w+)$", self.image),
         ]
         try:
             for m, pattern, fn in routes:
@@ -510,9 +686,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
 
     def register(self):
         data = self.body()
-        nick = str(data.get("nick", "")).strip()
-        if not 3 <= len(nick) <= 20:
-            raise ApiError(400, "Přezdívka musí mít 3 až 20 znaků")
+        nick = valid_nick(data)
         password = valid_password(data)
         token = secrets.token_urlsafe(24)
         try:
@@ -559,17 +733,59 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         ).fetchall()
         finders = finders_by_sticker(self.conn)
         return {
-            "nick": u["nick"],
+            **player_json(self.conn, u, with_achievements=True),
             "hasPassword": u["password"] is not None,
-            "points": u["points"],
-            "level": level_info(u["points"]),
-            "achievements": achievements(user_stats(self.conn, u["id"])),
             "aquarium": [
                 {**sticker_json(r), "author": r["author"], "caught": r["caught"],
                  "catchId": r["catch_id"], "catchImage": bool(r["catch_image"])} for r in aquarium
             ],
             "stickers": [{**sticker_json(r), "finds": r["finds"], "finders": finders.get(r["id"], [])} for r in mine],
         }
+
+    def update_profile(self):
+        """Úprava profilu. Posílá se jen to, co se mění: nick, motto, avatar (JPEG v base64, "" = smazat),
+        password, showcase (seznam id odznaků, null = automaticky poslední tři)."""
+        u = self.user()
+        data = self.body()
+        if "nick" in data:
+            nick = valid_nick(data)
+            try:
+                self.conn.execute("UPDATE users SET nick = ?, nick_key = ? WHERE id = ?", (nick, nick_key(nick), u["id"]))
+            except sqlite3.IntegrityError:
+                raise ApiError(409, "Tahle přezdívka už je obsazená")
+        if "motto" in data:
+            motto = str(data["motto"] or "").strip()
+            if len(motto) > MOTTO_MAX:
+                raise ApiError(400, f"Motto může mít nejvýš {MOTTO_MAX} znaků")
+            self.conn.execute("UPDATE users SET motto = ? WHERE id = ?", (motto or None, u["id"]))
+        if "password" in data:
+            self.conn.execute("UPDATE users SET password = ? WHERE id = ?", (hash_password(valid_password(data)), u["id"]))
+        if "avatar" in data:
+            avatar = save_image(data, f"avatar-{u['id']}-{secrets.token_hex(4)}", key="avatar")
+            if u["avatar"]:
+                (IMAGES_DIR / u["avatar"]).unlink(missing_ok=True)
+            self.conn.execute("UPDATE users SET avatar = ? WHERE id = ?", (avatar, u["id"]))
+        if "showcase" in data:
+            chosen = data["showcase"]
+            if chosen is not None and (not isinstance(chosen, list) or len(chosen) > SHOWCASE_SIZE
+                                       or not set(chosen) <= ACHIEVEMENT_IDS):
+                raise ApiError(400, f"Vystavit jde nejvýš {SHOWCASE_SIZE} odznaky")
+            self.conn.execute("UPDATE users SET showcase = ? WHERE id = ?",
+                              (None if chosen is None else json.dumps(chosen), u["id"]))
+        return self.me()
+
+    def leaderboard(self):
+        """Nejlepších 10 hráčů podle bodů. Když v nich nejsem, přidá se i moje pořadí."""
+        u = self.user()
+
+        def entry(row):
+            rank = 1 + self.conn.execute("SELECT COUNT(*) FROM users WHERE points > ?", (row["points"],)).fetchone()[0]
+            return {**player_json(self.conn, row), "rank": rank, "me": row["id"] == u["id"]}
+
+        rows = self.conn.execute("SELECT * FROM users ORDER BY points DESC, created LIMIT ?", (LEADERBOARD_SIZE,)).fetchall()
+        top = [entry(r) for r in rows]
+        return {"top": top, "me": None if any(e["me"] for e in top) else entry(u),
+                "players": self.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]}
 
     def environments(self):
         return [{"id": k, "name": v} for k, v in ENVIRONMENTS.items()]
@@ -649,10 +865,10 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         image = save_image(data, f"sticker-{sid}")
         now = time.time()
         self.conn.execute(
-            """INSERT INTO stickers (id, author_id, name, fish, rarity, env, hint, lat, lon, accuracy,
+            """INSERT INTO stickers (id, author_id, name, fish, fish_name, rarity, env, hint, lat, lon, accuracy,
                                      embeddings, image, created, activated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (sid, u["id"], name, fish, rarity, env, hint, lat, lon, acc,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (sid, u["id"], name, fish, new_fish_name(self.conn), rarity, env, hint, lat, lon, acc,
              json.dumps([rounded(e) for e in embeddings]), image, now, now),
         )
         for e in embeddings:
@@ -670,7 +886,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         except (KeyError, ValueError):
             raise ApiError(400, "Chybí poloha")
         rows = self.conn.execute(
-            """SELECT s.id, s.name, s.env, s.lat, s.lon, s.embeddings, s.author_id,
+            """SELECT s.id, s.name, s.env, s.rarity, s.fish_name, s.lat, s.lon, s.embeddings, s.author_id,
                       EXISTS(SELECT 1 FROM catches c WHERE c.sticker_id = s.id AND c.finder_id = ? AND c.accepted = 1) AS caught
                FROM stickers s WHERE s.status = 'active'""",
             (u["id"],),
@@ -681,6 +897,8 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
              "tattoo": r["env"] == TATTOO,
              "minSimilarity": MIN_SIMILARITY_PORTABLE if r["env"] in PORTABLE else MIN_SIMILARITY,
              "name": r["name"] if r["env"] in PORTABLE else None,
+             "rarity": r["rarity"],
+             "fishName": r["fish_name"] if r["caught"] or r["author_id"] == u["id"] else None,
              "own": r["author_id"] == u["id"], "caught": bool(r["caught"])}
             for r in rows
             if r["env"] in PORTABLE or distance_m(lat, lon, r["lat"], r["lon"]) <= NEARBY_M
@@ -748,15 +966,18 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                           (author_points(row["env"]), row["author_id"]))
         # Úlovek je už zapsaný výš, takže se dá porovnat stav před ním a po něm.
         before = {a["id"] for a in achievements(self.before_stats) if a["unlocked"]}
-        new = [a for a in achievements(user_stats(self.conn, u["id"])) if a["unlocked"] and a["id"] not in before]
+        after = user_stats(self.conn, u["id"])
+        new = [a for a in achievements(after, record_unlocks(self.conn, u["id"], after))
+               if a["unlocked"] and a["id"] not in before]
         old_level = level_info(u["points"])["level"]
         level = level_info(u["points"] + points)
+        fish = f"{row['fish_name']} ({row['fish']}, {row['rarity']})"
         if row["env"] == TATTOO:
-            message = f"Ulovil(a) jsi rybu {row['fish']} ({row['rarity']}) z tetování, které nosí {row['name']}!"
+            message = f"Ulovil(a) jsi rybu {fish} z tetování, které nosí {row['name']}!"
         elif row["env"] == OBJECT:
-            message = f"Ulovil(a) jsi rybu {row['fish']} z předmětu „{row['name']}“."
+            message = f"Ulovil(a) jsi rybu {fish} z předmětu „{row['name']}“."
         else:
-            message = f"Ulovil(a) jsi rybu {row['fish']} ({row['rarity']})! Samolepku nalepil(a) {row['author']}."
+            message = f"Ulovil(a) jsi rybu {fish}! Samolepku nalepil(a) {row['author']}."
         return {**base, "result": "caught", "points": points, "pointsText": fmt_points(points), "catchId": catch_id,
                 "level": level, "levelUp": level["level"] > old_level, "newAchievements": new, "message": message}
 
@@ -765,6 +986,9 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         u = self.user()
         if kind == "catch":
             row = self.conn.execute("SELECT image FROM catches WHERE id = ? AND finder_id = ?", (ident, u["id"])).fetchone()
+        elif kind == "avatar":
+            # Profilovky vidí všichni (žebříček).
+            row = self.conn.execute("SELECT avatar AS image FROM users WHERE id = ?", (ident,)).fetchone()
         else:
             row = self.conn.execute("SELECT image FROM stickers WHERE id = ? AND author_id = ?", (ident, u["id"])).fetchone()
         if not row or not row["image"]:
@@ -811,6 +1035,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                 "rarity": r["rarity"],
                 "name": r["name"],
                 "fish": r["fish"] if known else None,
+                "fishName": r["fish_name"] if known else None,
                 "hint": r["hint"],
                 "author": r["author"],
                 "caught": bool(r["caught"]),

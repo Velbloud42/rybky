@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,55 +24,51 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Logout
-import androidx.compose.material3.Button
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import kotlinx.coroutines.launch
-import androidx.compose.material.icons.outlined.AddLocationAlt
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Brush
-import androidx.compose.material.icons.outlined.LocalCafe
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.Diamond
-import androidx.compose.material.icons.outlined.EmojiEvents
-import androidx.compose.material.icons.outlined.Explore
-import androidx.compose.material.icons.outlined.Favorite
-import androidx.compose.material.icons.outlined.MenuBook
-import androidx.compose.material.icons.outlined.Phishing
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.SetMeal
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryScrollableTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 fun rarityColor(rarity: String) = when (rarity) {
@@ -80,26 +78,18 @@ fun rarityColor(rarity: String) = when (rarity) {
     else -> Color(0xFF94A3B8)
 }
 
-private val METRIC_ICONS = mapOf(
-    "catches" to Icons.Outlined.Phishing,
-    "species" to Icons.Outlined.MenuBook,
-    "rare" to Icons.Outlined.Diamond,
-    "legendary" to Icons.Outlined.AutoAwesome,
-    "envs" to Icons.Outlined.Explore,
-    "stickers" to Icons.Outlined.AddLocationAlt,
-    "best_sticker" to Icons.Outlined.Favorite,
-    "tattoos" to Icons.Outlined.Brush,
-    "objects" to Icons.Outlined.LocalCafe,
-)
+private const val SHOWCASE_SIZE = 3
 
 /** Profil: úroveň a záložky Akvárium / Atlas ryb / Úspěchy / Moje samolepky. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(api: Api, onLogout: () -> Unit) {
+    val scope = rememberCoroutineScope()
     var me by remember { mutableStateOf<JSONObject?>(null) }
     var atlas by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
     var tab by remember { mutableIntStateOf(0) }
+    var editing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         runCatching { api.me() to api.fish().objects() }
             .onSuccess { (m, f) -> me = m; atlas = f }
@@ -110,12 +100,16 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
         Centered { Text(error ?: "Načítám…", color = if (error != null) MaterialTheme.colorScheme.error else Color.Unspecified) }
         return
     }
+    fun saveShowcase(ids: List<String>?) = scope.launch {
+        runCatching { api.updateProfile(JSONObject().put("showcase", ids?.let { JSONArray(it) } ?: JSONObject.NULL)) }
+            .onSuccess { me = it }
+    }
 
     Column(Modifier.fillMaxSize()) {
-        LevelHeader(m, onLogout)
+        ProfileHeader(api, m) { editing = true }
         if (!m.optBoolean("hasPassword", true)) SetPasswordCard(api) { me = JSONObject(m.toString()).put("hasPassword", true) }
         val achievements = m.getJSONArray("achievements").objects()
-        PrimaryTabRow(selectedTabIndex = tab) {
+        PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
             listOf(
                 "Akvárium",
                 "Atlas",
@@ -141,8 +135,11 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
                                     RemoteImage(api, "/api/images/catch/${f.getInt("catchId")}", Modifier.size(56.dp))
                                 } else Icon(Icons.Outlined.SetMeal, null, tint = rarityColor(f.getString("rarity")))
                             },
-                            title = f.getString("fish"),
-                            subtitle = "${f.getString("rarity")} · „${f.optString("name")}“ od ${f.getString("author")}",
+                            title = f.str("fishName") ?: f.getString("fish"),
+                            subtitle = "${f.getString("fish")} · ${f.getString("rarity")} · „${f.optString("name")}“ od ${f.getString("author")}",
+                            titleColor = f.getString("rarity").let {
+                                if (it == "běžná") MaterialTheme.colorScheme.onSurface else rarityColor(it)
+                            },
                         )
                     }
                 }
@@ -170,7 +167,17 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
                         )
                     }
                 }
-                2 -> items(achievements) { a -> AchievementRow(a) }
+                2 -> {
+                    item { ShowcaseInfo(m.optBoolean("showcaseAuto", true)) { saveShowcase(null) } }
+                    items(achievements.sortedByDescending { it.getBoolean("unlocked") }) { a ->
+                        AchievementRow(a) {
+                            // Nově připnutý jde dopředu; když jsou už tři, odpadne nejstarší.
+                            val shown = m.getJSONArray("badges").objects().map { it.getString("id") }
+                            val id = a.getString("id")
+                            saveShowcase(if (id in shown) shown - id else (listOf(id) + shown).take(SHOWCASE_SIZE))
+                        }
+                    }
+                }
                 3 -> {
                     val stickers = m.getJSONArray("stickers").objects()
                     if (stickers.isEmpty()) item { Text("Ještě jsi nic nenalepil(a).") }
@@ -182,7 +189,7 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
                                 } else Icon(ENV_ICONS[s.optString("env")] ?: Icons.Outlined.Place, null, tint = MaterialTheme.colorScheme.primary)
                             },
                             title = s.optString("name").ifEmpty { s.getString("fish") },
-                            subtitle = "${s.getString("fish")} · ${s.optString("envName")}" +
+                            subtitle = "${s.str("fishName") ?: ""} (${s.getString("fish")}, ${s.getString("rarity")}) · ${s.optString("envName")}" +
                                 if (!s.isNull("hint")) " · „${s.getString("hint")}“" else "",
                             trailing = "${s.getInt("finds")}×",
                             footer = s.optJSONArray("finders")?.let { a -> (0 until a.length()).map { a.getString(it) } }
@@ -193,44 +200,56 @@ fun ProfileScreen(api: Api, onLogout: () -> Unit) {
             }
         }
     }
+    if (editing) {
+        EditProfileSheet(
+            api, m,
+            onSaved = { me = it; editing = false },
+            onLogout = { editing = false; onLogout() },
+            onDismiss = { editing = false },
+        )
+    }
 }
 
 /** Fotky ze serveru si pamatuje, ať se při přepínání záložek nestahují znovu. */
-private val imageCache = LruCache<String, Bitmap>(40)
+private val imageCache = LruCache<String, Bitmap>(60)
 
-/** Fotka ze serveru (úlovek, vlastní samolepka) se zaoblenými rohy. */
+/** Fotka ze serveru (úlovek, vlastní samolepka, profilovka) se zaoblenými rohy. */
 @Composable
-fun RemoteImage(api: Api, path: String, modifier: Modifier = Modifier) {
+fun RemoteImage(api: Api, path: String, modifier: Modifier = Modifier, shape: Shape = RoundedCornerShape(12.dp)) {
     val bitmap by produceState(imageCache.get(path), path) {
         if (value == null) runCatching {
             withContext(Dispatchers.Default) { api.image(path).let { BitmapFactory.decodeByteArray(it, 0, it.size) } }
         }.getOrNull()?.let { imageCache.put(path, it); value = it }
     }
-    Box(modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
+    Box(modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
         bitmap?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
     }
 }
 
+/** Profilovka s číslem úrovně, přezdívka s odznaky, motto a postup do další úrovně. */
 @Composable
-private fun LevelHeader(m: JSONObject, onLogout: () -> Unit) {
+private fun ProfileHeader(api: Api, m: JSONObject, onEdit: () -> Unit) {
     val level = m.getJSONObject("level")
     val start = level.getInt("levelStart")
     val next = level.getInt("nextLevel")
     val points = level.getDouble("points")
     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier.size(64.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "${level.getInt("level")}",
-                fontSize = 28.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
+        Box {
+            Avatar(api, m.str("avatar"), m.getString("nick"), 72.dp)
+            Box(
+                Modifier.align(Alignment.BottomEnd).offset(x = 4.dp, y = 4.dp).size(28.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary)
+                    .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("${level.getInt("level")}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
+            }
         }
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
-            Text(m.getString("nick"), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            NickWithBadges(m.getString("nick"), m.getJSONArray("badges").objects(), fontSize = 22, badgeSize = 24.dp)
             Text(level.getString("title"), color = MaterialTheme.colorScheme.primary)
+            m.str("motto")?.let { Text("„$it“", fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 2) }
             Spacer(Modifier.height(6.dp))
             LinearProgressIndicator(
                 progress = { ((points - start) / (next - start)).toFloat() },
@@ -241,7 +260,7 @@ private fun LevelHeader(m: JSONObject, onLogout: () -> Unit) {
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        IconButton(onClick = onLogout) { Icon(Icons.AutoMirrored.Outlined.Logout, "Odhlásit") }
+        IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, "Upravit profil") }
     }
 }
 
@@ -277,10 +296,29 @@ private fun SetPasswordCard(api: Api, onSaved: () -> Unit) {
 }
 
 @Composable
-private fun AchievementRow(a: JSONObject) {
+private fun ShowcaseInfo(auto: Boolean, onAuto: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(12.dp).fillMaxWidth()) {
+            Text("Odznaky", fontWeight = FontWeight.Bold)
+            Text(
+                "Nevšední, vzácné a legendární úspěchy jsou odznaky. Vedle jména se vystavují tři – " +
+                    if (auto) "teď automaticky ty naposledy získané. Špendlíkem si vybereš vlastní."
+                    else "ty, které sis připíchl(a) špendlíkem.",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!auto) TextButton(onClick = onAuto) { Text("Vystavovat automaticky poslední tři") }
+        }
+    }
+}
+
+@Composable
+private fun AchievementRow(a: JSONObject, onPin: () -> Unit) {
     val unlocked = a.getBoolean("unlocked")
+    val rarity = a.getString("rarity")
+    val color = rarityColor(rarity)
     ListItem(
         headlineContent = { Text(a.getString("name"), fontWeight = FontWeight.Bold) },
+        overlineContent = { Text(rarity.uppercase(), color = color, fontWeight = FontWeight.Bold, letterSpacing = 1.sp) },
         supportingContent = {
             Column {
                 Text(a.getString("description"))
@@ -296,21 +334,23 @@ private fun AchievementRow(a: JSONObject) {
                 }
             }
         },
-        leadingContent = {
-            Box(
-                Modifier.size(44.dp).clip(CircleShape)
-                    .background(if (unlocked) Amber.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    METRIC_ICONS[a.getString("metric")] ?: Icons.Outlined.EmojiEvents, null,
-                    tint = if (unlocked) Amber else MaterialTheme.colorScheme.outline,
-                )
+        leadingContent = { BadgeIcon(a.getString("metric"), rarity, 44.dp, active = unlocked) },
+        trailingContent = when {
+            unlocked && a.optBoolean("badge") -> {
+                {
+                    val pinned = a.optBoolean("showcased")
+                    IconButton(onClick = onPin) {
+                        Icon(
+                            if (pinned) Icons.Filled.PushPin else Icons.Outlined.PushPin,
+                            if (pinned) "Sundat z vystavených" else "Vystavit vedle jména",
+                            tint = if (pinned) color else MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                }
             }
+            unlocked -> { { Icon(Icons.Outlined.CheckCircle, "Splněno", tint = color) } }
+            else -> null
         },
-        trailingContent = if (unlocked) {
-            { Icon(Icons.Outlined.CheckCircle, "Splněno", tint = Amber) }
-        } else null,
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
         modifier = Modifier.clip(RoundedCornerShape(16.dp)),
     )
@@ -324,11 +364,12 @@ private fun ProfileItem(
     trailing: String? = null,
     dimmed: Boolean = false,
     footer: String? = null,
+    titleColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
     val alpha = if (dimmed) 0.55f else 1f
     ListItem(
         headlineContent = {
-            Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha))
+            Text(title, fontWeight = FontWeight.Bold, color = titleColor.copy(alpha = alpha))
         },
         supportingContent = {
             Column {

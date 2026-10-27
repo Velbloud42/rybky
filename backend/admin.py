@@ -313,14 +313,14 @@ class AdminMixin:
                                  (SELECT COUNT(*) FROM stickers s WHERE s.author_id = u.id) AS stickers,
                                  (SELECT COUNT(*) FROM catches c WHERE c.finder_id = u.id AND c.accepted = 1) AS catches
                           FROM users u ORDER BY u.points DESC, u.created"""),
-            "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.rarity, s.status, s.hint, s.lat, s.lon, s.created,
+            "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created,
                                     s.image IS NOT NULL AS hasImage, a.nick AS author,
                                     (SELECT COUNT(*) FROM catches c WHERE c.sticker_id = s.id AND c.accepted = 1) AS finds,
                                     (SELECT GROUP_CONCAT(u.nick, ', ') FROM catches c JOIN users u ON u.id = c.finder_id
                                      WHERE c.sticker_id = s.id AND c.accepted = 1) AS finders
                              FROM stickers s JOIN users a ON a.id = s.author_id ORDER BY s.created DESC"""),
             "catches": q("""SELECT c.id, c.time, c.accepted, c.similarity, c.distance, c.points,
-                                   c.image IS NOT NULL AS hasImage, u.nick AS finder, s.name AS sticker, s.env, s.fish,
+                                   c.image IS NOT NULL AS hasImage, u.nick AS finder, s.name AS sticker, s.env, s.fish, s.fish_name,
                                    EXISTS(SELECT 1 FROM refs r WHERE r.origin = 'catch:' || c.id AND r.negative = 1) AS negative
                             FROM catches c JOIN users u ON u.id = c.finder_id JOIN stickers s ON s.id = c.sticker_id
                             ORDER BY c.time DESC LIMIT 200"""),

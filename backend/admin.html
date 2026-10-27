@@ -181,7 +181,7 @@ function render() {
     body = `<div class="grid">${data.stickers.map(st => `<div class="card item">
       ${st.hasImage ? `<img loading="lazy" src="/admin/image/sticker/${st.id}" alt="">` : '<div class="noimg">bez fotky</div>'}
       <h3>${esc(st.name || '(bez názvu)')}</h3>
-      <div class="row"><span class="pill">${ENV[st.env] || esc(st.env)}</span><span class="pill">${esc(st.fish)} · ${esc(st.rarity)}</span>
+      <div class="row"><span class="pill">${ENV[st.env] || esc(st.env)}</span><span class="pill">${esc(st.fish_name || '')} · ${esc(st.fish)} · ${esc(st.rarity)}</span>
         ${st.status === 'active' ? '<span class="pill ok">aktivní</span>' : '<span class="pill bad">vypnutá</span>'}</div>
       <div class="muted">od ${esc(st.author)} · ${when(st.created)} · ulovena ${st.finds}×</div>
       ${st.hint ? `<div>„${esc(st.hint)}“</div>` : ''}
@@ -197,7 +197,7 @@ function render() {
     body = `<div class="card table-wrap"><table><tr><th>Fotka</th><th>Kdo</th><th>Co</th><th>Výsledek</th><th>Shoda</th><th>Vzdálenost</th><th>Kdy</th><th></th></tr>
       ${data.catches.map(c => `<tr>
         <td>${c.hasImage ? `<a target="_blank" href="/admin/image/catch/${c.id}"><img class="small-thumb" loading="lazy" src="/admin/image/catch/${c.id}" alt=""></a>` : ''}</td>
-        <td>${esc(c.finder)}</td><td>${esc(c.sticker)} <span class="muted">· ${esc(c.fish)}</span></td>
+        <td>${esc(c.finder)}</td><td>${esc(c.sticker)} <span class="muted">· ${esc(c.fish_name || '')} (${esc(c.fish)})</span></td>
         <td>${c.negative ? '<span class="pill bad">není rybka</span>' : c.accepted ? `<span class="pill ok">uloveno +${pts(c.points)}</span>` : '<span class="pill">nepřijato</span>'}</td>
         <td>${c.similarity != null ? Math.round(c.similarity * 100) + ' %' : ''}</td>
         <td>${c.distance != null ? Math.round(c.distance) + ' m' : '—'}</td>

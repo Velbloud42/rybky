@@ -272,7 +272,7 @@ private fun StickerCard(s: JSONObject, onClose: () -> Unit) {
                     fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    (if (s.isNull("fish")) "Neznámá ryba" else s.getString("fish")) +
+                    (if (s.isNull("fish")) "Neznámá ryba" else listOfNotNull(s.str("fishName"), s.getString("fish")).joinToString(" · ")) +
                         " · ${s.optString("rarity")} · ${s.optString("envName")}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

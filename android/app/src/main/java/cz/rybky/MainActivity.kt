@@ -42,10 +42,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddLocationAlt
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.LocalCafe
-import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Landscape
 import androidx.compose.material.icons.outlined.LocationCity
+import androidx.compose.material.icons.outlined.Leaderboard
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Park
 import androidx.compose.material.icons.outlined.Phishing
@@ -258,6 +258,7 @@ fun App() {
 private enum class Tab(val label: String, val icon: ImageVector, val fullScreen: Boolean) {
     Hunt("Lov", Icons.Outlined.Phishing, true),
     Map("Mapa", Icons.Outlined.Map, false),
+    Leaderboard("Žebříček", Icons.Outlined.Leaderboard, false),
     Aquarium("Akvárium", Icons.Outlined.SetMeal, false),
     Teach("Nalepit", Icons.Outlined.AddLocationAlt, true),
 }
@@ -293,6 +294,7 @@ fun MainScreen(api: Api, onLogout: () -> Unit) {
             when (tab) {
                 Tab.Hunt -> HuntScreen(api, embedder)
                 Tab.Map -> MapScreen(api)
+                Tab.Leaderboard -> LeaderboardScreen(api)
                 Tab.Aquarium -> ProfileScreen(api, onLogout)
                 Tab.Teach -> TeachScreen(api, embedder)
             }
@@ -360,17 +362,20 @@ fun LoginScreen(api: Api, onLoggedIn: (String) -> Unit) {
 /** Rybka, kterou kamera porovnává. Vlastní a už ulovené se jen poznají, ulovit nejdou. */
 private class Candidate(
     val id: String, val embeddings: List<FloatArray>, val kind: String, val name: String?, val minSimilarity: Float,
-    val own: Boolean, val caught: Boolean,
+    val own: Boolean, val caught: Boolean, val rarity: String?, val fishName: String?,
 ) {
     val portable get() = isPortable(kind)
     val catchable get() = !own && !caught
-    val label get() = when (kind) {
-        TATTOO -> "Tetování · $name"
-        OBJECT -> "Předmět · $name"
-        else -> "Samolepka"
-    } + when {
-        own -> " (tvoje)"
-        caught -> " (už ulovená)"
+    val label get() = listOfNotNull(
+        when (kind) {
+            TATTOO -> "Tetování · $name"
+            OBJECT -> "Předmět · $name"
+            else -> "Samolepka"
+        },
+        rarity,
+    ).joinToString(" · ") + when {
+        own -> " (tvoje: $fishName)"
+        caught -> " (už ulovená: $fishName)"
         else -> ""
     }
 }
@@ -405,7 +410,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                         o.optString("kind").ifEmpty { if (o.optBoolean("tattoo")) TATTOO else "sticker" },
                         o.optString("name").ifEmpty { null },
                         o.optDouble("minSimilarity", MIN_SIMILARITY.toDouble()).toFloat(),
-                        o.getBoolean("own"), o.getBoolean("caught"),
+                        o.getBoolean("own"), o.getBoolean("caught"), o.str("rarity"), o.str("fishName"),
                     )
                 }
         }.onSuccess { candidates = it }.onFailure { error = it.message }
@@ -494,6 +499,7 @@ private fun CatchResult(res: JSONObject, onContinue: () -> Unit) {
         val name = sticker.optString("name")
         Text("Úlovek!", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Amber, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
         FishReveal(
+            name = sticker.str("fishName"),
             fish = sticker.getString("fish"),
             rarity = sticker.getString("rarity"),
             envName = sticker.optString("envName").ifEmpty { null },
@@ -513,9 +519,15 @@ private fun CatchResult(res: JSONObject, onContinue: () -> Unit) {
         }
         res.getJSONArray("newAchievements").objects().forEach { a ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-                Icon(Icons.Outlined.EmojiEvents, null, tint = Amber)
+                BadgeIcon(a.getString("metric"), a.getString("rarity"), 28.dp)
                 Spacer(Modifier.width(8.dp))
-                Text("Achievement: ${a.getString("name")}", fontWeight = FontWeight.Bold)
+                Column {
+                    Text(a.getString("name"), fontWeight = FontWeight.Bold)
+                    Text(
+                        if (a.optBoolean("badge")) "Nový odznak · ${a.getString("rarity")}" else "Nový úspěch",
+                        fontSize = 13.sp, color = rarityColor(a.getString("rarity")),
+                    )
+                }
             }
         }
     }

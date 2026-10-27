@@ -25,11 +25,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Odhalení ryby po úlovku nebo nalepení: ikona v barvě vzácnosti, název, štítek vzácnosti a body.
+ * Odhalení ryby po úlovku nebo nalepení: ikona v barvě vzácnosti, vlastní jméno rybky, druh, štítek vzácnosti a body.
  * [points] je hlavní řádek s body (např. „+40 b.“), [details] drobný text pod ním.
  */
 @Composable
-fun FishReveal(fish: String, rarity: String, envName: String?, points: String, details: String? = null) {
+fun FishReveal(name: String?, fish: String, rarity: String, envName: String?, points: String, details: String? = null) {
     val color = rarityColor(rarity)
     Column(
         Modifier.fillMaxWidth(),
@@ -40,7 +40,8 @@ fun FishReveal(fish: String, rarity: String, envName: String?, points: String, d
             Modifier.size(88.dp).background(color.copy(alpha = 0.18f), CircleShape),
             contentAlignment = Alignment.Center,
         ) { Icon(Icons.Outlined.SetMeal, null, Modifier.size(52.dp), tint = color) }
-        Text(fish, fontSize = 26.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        Text(name ?: fish, fontSize = 26.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+        if (name != null) Text(fish, fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             rarity.uppercase(),
             color = color, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 1.5.sp,
