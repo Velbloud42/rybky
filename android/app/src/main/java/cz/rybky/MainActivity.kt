@@ -1,6 +1,15 @@
 package cz.rybky
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.os.Build
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.OutlinedButton
+import java.io.File
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -145,11 +154,61 @@ suspend fun loadRybka(api: Api): Rybka {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val lastCrash = recordCrashes()
         enableEdgeToEdge()
         setContent {
             RybkyTheme {
-                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { App() }
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    // Po pádu nejdřív výpis – zbytek aplikace by mohl spadnout znovu dřív, než ho někdo zkopíruje.
+                    var crash by remember { mutableStateOf(lastCrash) }
+                    crash?.let { CrashScreen(it) { crash = null } } ?: App()
+                }
             }
+        }
+    }
+
+    /**
+     * Při pádu uloží chybový výpis do souboru; vrátí výpis z minulého pádu (a soubor smaže), aby ho šlo
+     * zkopírovat a poslat. Výpis z release verze je zamaskovaný R8 – rozluští se mapping.txt dané verze.
+     */
+    private fun recordCrashes(): String? {
+        val file = File(filesDir, "crash.txt")
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            runCatching {
+                file.writeText(
+                    "Rybky ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE}) · Android ${Build.VERSION.RELEASE} · " +
+                        "${Build.MANUFACTURER} ${Build.MODEL}\n${error.stackTraceToString().take(12_000)}",
+                )
+            }
+            previous?.uncaughtException(thread, error)
+        }
+        return file.takeIf { it.exists() }?.let { f -> runCatching { f.readText() }.getOrNull().also { f.delete() } }
+    }
+}
+
+@Composable
+private fun CrashScreen(report: String, onContinue: () -> Unit) {
+    val context = LocalContext.current
+    var copied by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(20.dp)) {
+        Text("Aplikace minule spadla", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Text("Zkopíruj prosím tenhle výpis a pošli ho, ať se to dá opravit.")
+        Spacer(Modifier.height(12.dp))
+        Text(
+            report, fontSize = 11.sp, lineHeight = 13.sp,
+            modifier = Modifier.weight(1f).fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(12.dp))
+                .padding(10.dp).verticalScroll(rememberScrollState()),
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Rybky – pád", report))
+                copied = true
+            }, Modifier.weight(1f)) { Text(if (copied) "Zkopírováno" else "Zkopírovat") }
+            OutlinedButton(onClick = onContinue, Modifier.weight(1f)) { Text("Pokračovat") }
         }
     }
 }
