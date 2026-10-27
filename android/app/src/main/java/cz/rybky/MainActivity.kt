@@ -297,14 +297,21 @@ fun LoginScreen(api: Api, onLoggedIn: (String) -> Unit) {
 
 // --- lov: živá kamera rozpoznává samolepky v okolí -----------------------
 
+/** Rybka, kterou kamera porovnává. Vlastní a už ulovené se jen poznají, ulovit nejdou. */
 private class Candidate(
     val id: String, val embeddings: List<FloatArray>, val kind: String, val name: String?, val minSimilarity: Float,
+    val own: Boolean, val caught: Boolean,
 ) {
     val portable get() = isPortable(kind)
+    val catchable get() = !own && !caught
     val label get() = when (kind) {
         TATTOO -> "Tetování · $name"
         OBJECT -> "Předmět · $name"
         else -> "Samolepka"
+    } + when {
+        own -> " (tvoje)"
+        caught -> " (už ulovená)"
+        else -> ""
     }
 }
 
@@ -330,7 +337,6 @@ fun HuntScreen(api: Api, embedder: Embedder) {
             val f = currentFix(context)
             fix = f
             api.nearby(f.lat, f.lon).objects()
-                .filter { !it.getBoolean("own") && !it.getBoolean("caught") }
                 .map { o ->
                     val shots = o.getJSONArray("embeddings")
                     Candidate(
@@ -339,6 +345,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                         o.optString("kind").ifEmpty { if (o.optBoolean("tattoo")) TATTOO else "sticker" },
                         o.optString("name").ifEmpty { null },
                         o.optDouble("minSimilarity", MIN_SIMILARITY.toDouble()).toFloat(),
+                        o.getBoolean("own"), o.getBoolean("caught"),
                     )
                 }
         }.onSuccess { candidates = it }.onFailure { error = it.message }
@@ -356,7 +363,8 @@ fun HuntScreen(api: Api, embedder: Embedder) {
             similarity = best?.second?.first ?: 0f
             bestMatch = best?.first
             val passes = best != null && best.second.first >= best.first.minSimilarity
-            streak = if (passes) streak + 1 else 0
+            // Vlastní nebo už ulovenou rybku jen ukáže, na server ji neposílá.
+            streak = if (passes && best!!.first.catchable) streak + 1 else 0
             val f = fix
             if (best != null && f != null && streak >= MATCH_STREAK) {
                 busy = true
@@ -387,20 +395,29 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                     Text("Zjišťuju polohu a rybky v okolí…")
                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 }
-                candidates!!.isEmpty() -> Panel {
+                candidates!!.none { it.catchable } && bestMatch == null -> Panel {
                     Text("Do 300 m tu není žádná rybka ani tetování k ulovení.")
                     TextButton(onClick = { reload++ }) { Text("Obnovit") }
                 }
                 else -> Panel {
                     Text("Zaměř samolepku do čtverce", fontWeight = FontWeight.Bold)
-                    val portable = candidates!!.count { it.portable }
+                    val catchable = candidates!!.filter { it.catchable }
+                    val portable = catchable.count { it.portable }
                     Text(
-                        "Rybek v okolí: ${candidates!!.size - portable}" +
+                        "K ulovení: ${catchable.size - portable} v okolí" +
                             if (portable > 0) " · tetování a předmětů: $portable" else "",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
-                    bestMatch?.let { Text("Nejpodobnější: ${it.label}", fontSize = 13.sp) }
+                    val match = bestMatch
+                    if (match != null && !match.catchable && similarity >= match.minSimilarity) {
+                        Text(
+                            if (match.own) "Tohle je tvoje rybka (${match.label.substringBefore(" (")}) – vlastní ulovit nejde."
+                            else "Tuhle rybku už máš v akváriu.",
+                            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    match?.let { Text("Nejpodobnější: ${it.label}", fontSize = 13.sp) }
                     SimilarityBar(similarity, bestMatch?.minSimilarity ?: MIN_SIMILARITY)
                 }
             }
