@@ -39,6 +39,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.outlined.AddLocationAlt
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.LocalCafe
@@ -53,6 +55,7 @@ import androidx.compose.material.icons.outlined.SetMeal
 import androidx.compose.material.icons.outlined.Water
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -410,6 +413,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     val snapshot = remember { CameraSnapshot() }
+    var torch by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { runCatching { loadRybka(api) }.onSuccess { rybka = it } }
     LaunchedEffect(reload) {
@@ -434,7 +438,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        CameraView(Modifier.fillMaxSize(), snapshot) { frame ->
+        CameraView(Modifier.fillMaxSize(), snapshot, torch) { frame ->
             val list = candidates ?: return@CameraView
             if (busy || result != null) return@CameraView
             val crops = embedder.embedCrops(frame)
@@ -477,6 +481,7 @@ fun HuntScreen(api: Api, embedder: Embedder) {
         }
         val similar = bestMatch?.let { similarity >= it.minSimilarity } == true
         AimSquare(if (similar && (clear || bestMatch?.kind == TATTOO) && fishSeen) Amber else Color.White)
+        TorchButton(torch, Modifier.align(Alignment.TopStart)) { torch = !torch }
 
         Column(Modifier.align(Alignment.BottomCenter).padding(16.dp).fillMaxWidth()) {
             val res = result
@@ -580,6 +585,22 @@ private fun CatchResult(res: JSONObject, onContinue: () -> Unit) {
     }
     Spacer(Modifier.height(8.dp))
     Button(onClick = onContinue, Modifier.fillMaxWidth()) { Text("Lovit dál") }
+}
+
+/** Žárovka vlevo nahoře: rozsvítí baterku telefonu na přisvícení samolepky nebo tetování. */
+@Composable
+fun TorchButton(on: Boolean, modifier: Modifier = Modifier, onToggle: () -> Unit) {
+    IconButton(
+        onClick = onToggle,
+        modifier = modifier.statusBarsPadding().padding(12.dp).size(48.dp)
+            .background(if (on) Amber else Color.Black.copy(alpha = 0.45f), CircleShape),
+    ) {
+        Icon(
+            if (on) Icons.Filled.Lightbulb else Icons.Outlined.Lightbulb,
+            if (on) "Zhasnout baterku" else "Rozsvítit baterku",
+            tint = if (on) Color.Black else Color.White,
+        )
+    }
 }
 
 @Composable

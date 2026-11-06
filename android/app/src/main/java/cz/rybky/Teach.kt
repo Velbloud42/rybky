@@ -206,6 +206,7 @@ fun TeachScreen(api: Api, embedder: Embedder) {
     val form = remember { StickerForm() }
     var rybka by remember { mutableStateOf<Rybka?>(null) }
     var score by remember { mutableStateOf<Pair<Float, Boolean>?>(null) }
+    var torch by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { runCatching { loadRybka(api) }.onSuccess { rybka = it } }
 
     // Fotka z galerie se nejdřív otevře v editoru, kde jde přiblížit, otočit a posunout.
@@ -271,7 +272,7 @@ fun TeachScreen(api: Api, embedder: Embedder) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         val s = shot
         if (s == null) {
-            CameraView(Modifier.fillMaxSize(), snapshot) { frame ->
+            CameraView(Modifier.fillMaxSize(), snapshot, torch) { frame ->
                 val crops = embedder.embedCrops(frame)
                 latest.set(crops)
                 score = rybka?.check(crops)
@@ -280,6 +281,7 @@ fun TeachScreen(api: Api, embedder: Embedder) {
             val r = rybka
             val sc = score?.first
             AimSquare(if (recognized) Amber else Color.White)
+            TorchButton(torch, Modifier.align(Alignment.TopStart)) { torch = !torch }
             Text(
                 error ?: when {
                     r == null || sc == null -> "Zaměř rybku do čtverce a vyfoť ji"
@@ -287,7 +289,7 @@ fun TeachScreen(api: Api, embedder: Embedder) {
                     else -> "Rybka ${(sc * 100).toInt()} % · " + if (recognized) "rozpoznána" else "zatím ji nevidím"
                 },
                 color = Color.White,
-                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 16.dp)
+                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 16.dp, start = 72.dp, end = 72.dp)
                     .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             )

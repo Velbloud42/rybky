@@ -1,5 +1,10 @@
 package cz.rybky
 
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.camera.core.Camera
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
@@ -122,8 +127,15 @@ class CameraSnapshot {
  * (už otočený správně) – volá se na pozadí, ne v UI vlákně.
  */
 @Composable
-fun CameraView(modifier: Modifier = Modifier, snapshot: CameraSnapshot? = null, onFrame: (Bitmap) -> Unit) {
+fun CameraView(
+    modifier: Modifier = Modifier, snapshot: CameraSnapshot? = null, torch: Boolean = false, onFrame: (Bitmap) -> Unit,
+) {
     val context = LocalContext.current
+    var camera by remember { mutableStateOf<Camera?>(null) }
+    // Baterka pro přisvícení (jen když ji telefon má).
+    LaunchedEffect(camera, torch) {
+        camera?.takeIf { it.cameraInfo.hasFlashUnit() }?.cameraControl?.enableTorch(torch)
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val frameCallback = rememberUpdatedState(onFrame)
     val previewView = remember { PreviewView(context) }
@@ -154,7 +166,7 @@ fun CameraView(modifier: Modifier = Modifier, snapshot: CameraSnapshot? = null, 
                 }
             }
             provider.unbindAll()
-            provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            camera = provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
         }, ContextCompat.getMainExecutor(context))
 
         onDispose {
