@@ -9,6 +9,7 @@ Potřebuje balík `webauthn`; bez něj zbytek serveru funguje, jen admin hlásí
 """
 import base64
 import json
+import match
 import math
 import os
 import re
@@ -61,8 +62,8 @@ def configure(db, images_dir, catch_points, author_points, new_fish_name, level_
             print(f"Admin: kód pro registraci prvního klíče na {ORIGIN}/admin: {code}", flush=True)
 
 
-# Kam ryba kouká: nahoru, dolů, dopředu (kam plave), dozadu, na diváka.
-GAZE = {"U": "nahoru", "D": "dolů", "F": "dopředu", "B": "dozadu", "C": "na diváka"}
+# Kam ryba kouká: doleva, doprava, do středu (rovně), nahoru, dolů.
+GAZE = {"L": "doleva", "R": "doprava", "C": "do středu", "U": "nahoru", "D": "dolů"}
 
 
 def style_code(num, fins, filled, smile, lid, brow, gaze):
@@ -305,8 +306,27 @@ class AdminMixin:
 
     # --- data ----------------------------------------------------------------
 
+    def _update_covers(self):
+        """Dopočítá titulní fotky rybek, které ji nemají: z originálu a úlovků (nevyřazených) vybere tu,
+        která má s ostatními fotkami nejvíc shodných bodů kresby. Bez OpenCV je titulní originál."""
+        conn = self.conn
+        for (sid,) in conn.execute("SELECT id FROM stickers WHERE cover IS NULL").fetchall():
+            photos = [(f"sticker:{sid}", r["image"]) for r in conn.execute(
+                "SELECT image FROM stickers WHERE id = ? AND image IS NOT NULL", (sid,))]
+            photos += [(f"catch:{r['id']}", r["image"]) for r in conn.execute(
+                """SELECT id, image FROM catches WHERE sticker_id = ? AND accepted = 1 AND excluded = 0
+                   AND image IS NOT NULL ORDER BY time""", (sid,))]
+            photos = [(origin, path) for origin, name in photos if (path := _config["images_dir"] / name).exists()]
+            cover = photos[0][0] if photos else ""
+            if len(photos) > 2 and match.available():
+                feats = [match.features_of_file(path) for _, path in photos]
+                scores = [sum(match.inliers(a, b) for j, b in enumerate(feats) if j != i) for i, a in enumerate(feats)]
+                cover = photos[max(range(len(photos)), key=lambda i: (scores[i], -i))][0]
+            conn.execute("UPDATE stickers SET cover = ? WHERE id = ?", (cover, sid))
+
     def _admin_overview(self):
         self._require_session()
+        self._update_covers()
         q = lambda sql, *args: [dict(r) for r in self.conn.execute(sql, args).fetchall()]  # noqa: E731
         one = lambda sql, *args: self.conn.execute(sql, args).fetchone()[0]  # noqa: E731
         return {
@@ -336,6 +356,7 @@ class AdminMixin:
                            ORDER BY s.created LIMIT 1) AS sampleSticker
                    FROM styles st ORDER BY st.num""")],
             "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created, s.style_id AS styleId,
+                                    s.cover,
                                     json_array_length(s.context) AS contextCount,
                                     s.image IS NOT NULL AS hasImage, a.nick AS author,
                                     (SELECT COUNT(*) FROM catches c WHERE c.sticker_id = s.id AND c.accepted = 1) AS finds,
@@ -489,6 +510,7 @@ class AdminMixin:
         """Zařadí fotku úlovku [c] mezi vzory jeho rybky, nebo ji z nich vyřadí (i s okolím, které přidala)."""
         conn = self.conn
         conn.execute("UPDATE catches SET excluded = ? WHERE id = ?", (int(not use), c["id"]))
+        conn.execute("UPDATE stickers SET cover = NULL WHERE id = ?", (c["sticker_id"],))
         added = json.loads(c["context"] or "[]")
         sticker = conn.execute("SELECT context FROM stickers WHERE id = ?", (c["sticker_id"],)).fetchone()
         if not added or not sticker["context"]:
@@ -510,7 +532,7 @@ class AdminMixin:
             return value
         num, fins, smile = number("num", 1, 999), number("fins", 1, 3), number("smile", -9, 9)
         filled, lid, brow = (int(bool(data.get(k))) for k in ("filled", "lid", "brow"))
-        gaze = str(data.get("gaze") or "F")
+        gaze = str(data.get("gaze") or "C")
         if gaze not in GAZE:
             raise AdminError(400, "Neznámý směr pohledu")
         code = style_code(num, fins, filled, smile, lid, brow, gaze)

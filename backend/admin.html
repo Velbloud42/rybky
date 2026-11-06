@@ -137,6 +137,9 @@
   .sample .meta { padding: 6px 8px; font-size: 12.5px; display: grid; gap: 4px; }
   .sample .meta button { padding: 3px 9px; font-size: 12.5px; }
   .sample.original { outline: 2px solid var(--primary); }
+  .fish.clickable { cursor: pointer; transition: transform .1s; }
+  .fish.clickable:hover { transform: translateY(-2px); }
+  dialog#fishDlg:not([open]) { display: none !important; }
 
   dialog { border: 0; border-radius: 24px; padding: 22px; background: var(--card); color: var(--text); width: min(420px, calc(100vw - 32px));
            box-shadow: 0 20px 60px rgba(0,0,0,.35); }
@@ -165,6 +168,7 @@
 </header>
 <main id="app"><p class="muted">Načítám…</p></main>
 
+<dialog id="fishDlg" style="width:min(820px, calc(100vw - 32px));display:grid;gap:12px"></dialog>
 <dialog id="styleDlg" style="width:min(520px, calc(100vw - 32px))"><form method="dialog" id="styleForm"></form></dialog>
 <dialog id="pointsDlg">
   <form method="dialog" id="pointsForm">
@@ -325,7 +329,6 @@ function tabs() {
     ['hraci', 'Hráči', data.users.length],
     ['rybky', 'Rybky', data.stickers.length],
     ['ulovky', 'Úlovky', data.catches.filter(c => c.accepted).length],
-    ['databaze', 'Databáze', data.samples.length + data.stickers.filter(x => x.hasImage).length],
     ['styly', 'Index stylů', data.styles.length],
     ['body', 'Úpravy bodů', data.adjustments.length],
     ['klic', 'Klíč'],
@@ -338,7 +341,7 @@ function render() {
   tabsEl.innerHTML = tabs().map(([id, label, n]) =>
     `<button data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${label}${n != null ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   tabsEl.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { state.tab = b.dataset.tab; save(); render(); scrollTo(0, 0); });
-  ({prehled: overviewTab, hraci: playersTab, rybky: fishTab, ulovky: catchesTab, styly: stylesTab, databaze: databaseTab, body: adjustmentsTab, klic: keyTab})[state.tab]();
+  ({prehled: overviewTab, hraci: playersTab, rybky: fishTab, ulovky: catchesTab, styly: stylesTab, body: adjustmentsTab, klic: keyTab})[state.tab]();
 }
 
 /** Lišta s hledáním a filtry nad seznamem; při psaní se překreslí jen seznam, ať hledání neztratí fokus. */
@@ -437,6 +440,10 @@ function playersTab() {
   });
 }
 
+// Titulní fotka rybky: ta z jejích fotek, která se nejvíc shoduje s ostatními (vybírá server).
+const coverUrl = st => !st.cover ? null : st.cover.startsWith('catch:') ? `/admin/image/catch/${st.cover.slice(6)}`
+  : `/admin/image/sticker/${st.cover.slice(8)}`;
+
 function fishTab() {
   const f = state.fish;
   withToolbar(searchBox(f.q, 'Hledat jméno, místo, autora…') +
@@ -456,39 +463,68 @@ function fishTab() {
     if (!list.length) return '<div class="card empty">Žádná rybka neodpovídá filtru.</div>';
     return `<div class="grid">${list.map(st => {
       const on = st.status === 'active';
-      return `<div class="fish ${on ? '' : 'off'}">
-        <div class="photo">${st.hasImage ? `<a href="/admin/image/sticker/${st.id}" target="_blank"><img loading="lazy" src="/admin/image/sticker/${st.id}" alt=""></a>` : 'bez fotky'}
+      const img = coverUrl(st);
+      return `<div class="fish clickable ${on ? '' : 'off'}" data-open-fish="${st.id}">
+        <div class="photo">${img ? `<img loading="lazy" src="${img}" alt="">` : 'bez fotky'}
           <span class="pill ${on ? 'ok' : 'bad'}">${on ? 'aktivní' : 'vypnutá'}</span></div>
         <div class="body">
           <div class="row"><h3 class="grow">${esc(st.fish_name || st.fish)}</h3>${rarity(st.rarity)}</div>
           <div class="muted small">${esc(st.fish)} · ${esc(ENV[st.env] || st.env)}</div>
-          <div class="row small"><span class="muted">Styl</span>
-            <select data-style-of="${st.id}" style="flex:1;min-width:0;padding:4px 8px">
-              <option value="">nezařazená</option>
-              ${data.styles.map(x => `<option value="${x.id}" ${x.id === st.styleId ? 'selected' : ''}>${esc(x.code)}${x.note ? ` – ${esc(x.note)}` : ''}</option>`).join('')}
-            </select></div>
           <div>„${esc(st.name || '—')}“ <span class="muted">od ${esc(st.author)}</span></div>
           ${st.hint ? `<div class="muted small">Nápověda: „${esc(st.hint)}“</div>` : ''}
           <div class="small">${st.finds ? `Ulovena ${st.finds}× · <span class="muted">${esc(st.finders)}</span>` : '<span class="muted">Zatím ji nikdo neulovil</span>'}</div>
-          <div class="muted small">Přidána ${when(st.created)}${st.lat != null ? ` · <a target="_blank" rel="noopener" href="https://mapy.com/?q=${st.lat},${st.lon}">na mapě</a>` : ''}</div>
-          <div class="actions">
-            ${on ? `<button data-act="sticker_lost" data-id="${st.id}" data-done="Rybka je vypnutá">Vypnout</button>
-                    <button class="danger" data-act="sticker_not_rybka" data-id="${st.id}" data-done="Vypnuto a zařazeno mezi „není rybka“"
-                      data-confirm="Vypnout rybku a její fotku zařadit mezi „není rybka“?">Není rybka</button>`
-                 : `<button data-act="sticker_restore" data-id="${st.id}" data-done="Rybka je zase ve hře">Zapnout</button>`}
-            <button class="danger" data-act="sticker_delete" data-id="${st.id}" data-done="Rybka je smazaná"
-              data-confirm="Smazat rybku ${esc(st.fish_name || st.name || st.id)} natrvalo? Zmizí i její úlovky z akvárií a lovci i autor přijdou o body za ni. Jen schovat ji jde tlačítkem Vypnout.">Smazat</button>
-          </div>
-          <details class="edit"><summary>Upravit jméno${st.lat != null ? ' a polohu' : ''}</summary>
-            <div class="row"><input data-fish-name="${st.id}" value="${esc(st.fish_name || '')}" maxlength="40" placeholder="Jméno rybky">
-              <button data-rename="${st.id}">Uložit</button><button data-rename="${st.id}" data-random="1" title="Vylosovat nové náhodné jméno">🎲</button></div>
-            ${st.lat != null ? `<div class="row"><input data-coords="${st.id}" value="${st.lat.toFixed(6)}, ${st.lon.toFixed(6)}">
-              <button data-save-coords="${st.id}">Uložit polohu</button></div>` : ''}
-          </details>
+          <div class="muted small">Přidána ${when(st.created)}${st.lat != null ? ` · <a target="_blank" rel="noopener" href="https://mapy.com/?q=${st.lat},${st.lon}" onclick="event.stopPropagation()">na mapě</a>` : ''}</div>
         </div></div>`;
     }).join('')}</div>`;
   });
 }
+
+// Detail rybky: styl, úpravy, mazání a všechny fotky, ze kterých se pozná.
+const fishDlg = document.getElementById('fishDlg');
+let openFishId = null;
+function openFish(id) { openFishId = id; drawFish(); if (!fishDlg.open) fishDlg.showModal(); }
+function drawFish() {
+  const st = data.stickers.find(x => x.id === openFishId);
+  if (!st) { fishDlg.close(); return; }
+  const on = st.status === 'active';
+  const samples = data.samples.filter(x => x.stickerId === st.id);
+  const cover = o => st.cover === o ? '<span class="pill" style="--c:var(--primary)">titulní</span>' : '';
+  fishDlg.innerHTML = `<div class="row"><h2 class="grow" style="margin:0">${esc(st.fish_name || st.fish)} ${rarity(st.rarity)}</h2>
+      <button class="ghost" id="fishClose">Zavřít</button></div>
+    <div class="muted small">${esc(st.fish)} · ${esc(ENV[st.env] || st.env)} · „${esc(st.name || '—')}“ od ${esc(st.author)} ·
+      <span class="pill ${on ? 'ok' : 'bad'}">${on ? 'aktivní' : 'vypnutá'}</span></div>
+    <div class="row"><b>Styl</b><select data-style-of="${st.id}" style="flex:1;min-width:0">
+      <option value="">nezařazená</option>
+      ${data.styles.map(x => `<option value="${x.id}" ${x.id === st.styleId ? 'selected' : ''}>${esc(x.code)}${x.note ? ` – ${esc(x.note)}` : ''}</option>`).join('')}
+    </select></div>
+    <div class="actions row">
+      ${on ? `<button data-act="sticker_lost" data-id="${st.id}" data-done="Rybka je vypnutá">Vypnout</button>
+              <button class="danger" data-act="sticker_not_rybka" data-id="${st.id}" data-done="Vypnuto a zařazeno mezi „není rybka“"
+                data-confirm="Vypnout rybku a její fotku zařadit mezi „není rybka“?">Není rybka</button>`
+           : `<button data-act="sticker_restore" data-id="${st.id}" data-done="Rybka je zase ve hře">Zapnout</button>`}
+      <button class="danger" data-act="sticker_delete" data-id="${st.id}" data-done="Rybka je smazaná"
+        data-confirm="Smazat rybku ${esc(st.fish_name || st.name || st.id)} natrvalo? Zmizí i její úlovky z akvárií a lovci i autor přijdou o body za ni. Jen schovat ji jde tlačítkem Vypnout.">Smazat</button>
+    </div>
+    <div class="row"><input data-fish-name="${st.id}" value="${esc(st.fish_name || '')}" maxlength="40" placeholder="Jméno rybky" style="flex:1 1 200px;min-width:0">
+      <button data-rename="${st.id}">Přejmenovat</button><button data-rename="${st.id}" data-random="1" title="Vylosovat nové náhodné jméno">🎲</button></div>
+    ${st.lat != null ? `<div class="row"><input data-coords="${st.id}" value="${st.lat.toFixed(6)}, ${st.lon.toFixed(6)}" style="flex:1 1 200px;min-width:0">
+      <button data-save-coords="${st.id}">Uložit polohu</button></div>` : ''}
+    <h3 style="margin:6px 0 0">Fotky, podle kterých se pozná</h3>
+    <div class="samples">
+      <div class="sample original">${st.hasImage ? `<a href="/admin/image/sticker/${st.id}" target="_blank"><img loading="lazy" src="/admin/image/sticker/${st.id}" alt=""></a>` : '<div class="noimg">bez fotky</div>'}
+        <div class="meta"><b>Originál</b> ${cover(`sticker:${st.id}`)}<span class="muted">${esc(st.author)} · ${when(st.created)}</span></div></div>
+      ${samples.map(x => `<div class="sample ${x.excluded ? 'off' : ''}">
+        ${x.hasImage ? `<a href="/admin/image/catch/${x.id}" target="_blank"><img loading="lazy" src="/admin/image/catch/${x.id}" alt=""></a>` : '<div class="noimg">bez fotky</div>'}
+        <div class="meta"><b>${esc(x.finder)}</b> ${cover(`catch:${x.id}`)}<span class="muted">${match(x)} · ${when(x.time)}</span>
+          ${x.excluded ? `<span class="pill warn">vyřazená</span><button data-act="sample_include" data-id="${x.id}" data-done="Fotka je zase mezi vzory">Vrátit mezi vzory</button>`
+            : `<button data-act="sample_exclude" data-id="${x.id}" data-done="Fotka vyřazená ze vzorů">Vyřadit ze vzorů</button>`}
+          <button class="danger" data-act="catch_wrong_fish" data-id="${x.id}" data-done="Úlovek zrušen"
+            data-confirm="Na fotce je jiná rybka? ${esc(x.finder)} a autor přijdou o body za tenhle úlovek a fotka se vyřadí ze vzorů.">Jiná rybka</button></div></div>`).join('')}
+    </div>`;
+  document.getElementById('fishClose').onclick = () => fishDlg.close();
+  bindActions(fishDlg);
+}
+fishDlg.addEventListener('close', () => { openFishId = null; });
 
 function catchesTab() {
   const f = state.catches;
@@ -522,20 +558,20 @@ function catchesTab() {
 }
 
 // Index stylů: každá kresba ryby má kód SxPxVxUxOxxx složený z čísel (vysvětlení v legendě nahoře).
-const GAZE = {U: 'nahoru', D: 'dolů', F: 'dopředu', B: 'dozadu', C: 'na diváka'};
+const GAZE = {L: 'doleva', R: 'doprava', C: 'do středu', U: 'nahoru', D: 'dolů'};
 const smileText = n => n > 0 ? `usměvavá +${n}` : n < 0 ? `smutná ${n}` : 'neutrální 0';
 const codeOf = v => `S${v.num}P${v.fins}V${v.filled ? 1 : 0}U${v.smile > 0 ? '+' : ''}${v.smile}O${v.lid ? 1 : 0}${v.brow ? 1 : 0}${v.gaze}`;
 const decode = x => [`${plural(x.fins, 'ploutev', 'ploutve', 'ploutví')}`, x.filled ? 'vybarvená' : 'jen obrys', smileText(x.smile),
   `oko ${x.lid ? 's víčkem' : 'bez víčka'}, ${x.brow ? 's obočím' : 'bez obočí'}, kouká ${GAZE[x.gaze] || '?'}`].join(' · ');
 const LEGEND = `<div class="card" style="display:grid;gap:10px;margin-bottom:16px">
   <h2 style="margin:0">Jak číst kód stylu</h2>
-  <div style="font:700 22px/1 ui-monospace,monospace;letter-spacing:.04em">S2 P3 V1 U+2 O10F</div>
+  <div style="font:700 22px/1 ui-monospace,monospace;letter-spacing:.04em">S2 P3 V1 U+2 O10C</div>
   <div class="tiles" style="margin:0;grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
     <div><b>S</b> číslo stylu<div class="muted small">pořadí v indexu</div></div>
     <div><b>P</b> ploutve 1–3<div class="muted small">kolik jich ryba má (standard horní, dolní, ocasní = 3)</div></div>
     <div><b>V</b> vybarvení 1 / 0<div class="muted small">1 = něco je vyplněné, 0 = jen obrys</div></div>
     <div><b>U</b> úsměv −9 … +9<div class="muted small">minus smutná, 0 neutrální, plus usměvavá; číslo = jak moc</div></div>
-    <div><b>O</b> oko: víčko, obočí, pohled<div class="muted small">1/0 víčko, 1/0 obočí, směr: U nahoru, D dolů, F dopředu, B dozadu, C na diváka</div></div>
+    <div><b>O</b> oko: víčko, obočí, pohled<div class="muted small">1/0 víčko, 1/0 obočí, kam kouká: L doleva, R doprava, C do středu, U nahoru, D dolů</div></div>
   </div></div>`;
 function stylesTab() {
   app.innerHTML = `<div class="toolbar"><span class="muted grow">Každá rybka má styl; vybereš ho u ní v záložce Rybky.</span>
@@ -562,7 +598,7 @@ function stylesTab() {
 
 const styleDlg = document.getElementById('styleDlg');
 function openStyle(x) {
-  const v = x || {num: Math.max(0, ...data.styles.map(s => s.num || 0)) + 1, fins: 3, filled: 0, smile: 0, lid: 0, brow: 0, gaze: 'F'};
+  const v = x || {num: Math.max(0, ...data.styles.map(s => s.num || 0)) + 1, fins: 3, filled: 0, smile: 0, lid: 0, brow: 0, gaze: 'C'};
   const form = document.getElementById('styleForm');
   form.innerHTML = `<h2>${x ? 'Upravit styl' : 'Nový styl'}</h2>
     <div class="preview" style="font:700 22px/1.2 ui-monospace,monospace;text-align:center" id="codePreview"></div>
@@ -601,51 +637,6 @@ function openStyle(x) {
 /** Shoda úlovku: u tetování počet shodných bodů kresby, jinak podobnost okolí. */
 const match = c => c.inliers != null ? `${c.inliers} b. kresby` : c.similarity != null ? Math.round(c.similarity * 100) + ' %' : '—';
 
-// Databáze: z jakých fotek se která rybka pozná. Špatný vzorek jde vyřadit, špatný úlovek zrušit.
-function databaseTab() {
-  const f = state.db;
-  const refs = (src, neg) => data.refCounts.filter(r => (src == null || r.source === src) && !!r.negative === neg).reduce((a, r) => a + r.n, 0);
-  const originImage = o => o.startsWith('sticker:') ? `/admin/image/sticker/${o.slice(8)}` : `/admin/image/catch/${o.slice(6)}`;
-  withToolbar(searchBox(f.q, 'Hledat rybku, místo, hráče…') +
-    chips('dbkind', [['all', 'Všechny'], ['tattoo', 'Tetování'], ['object', 'Předměty'], ['sticker', 'Samolepky']], f.kind) +
-    styleSelect(f.style || 'all', 'id="styleFilter"'),
-  redraw => {
-    document.getElementById('q').oninput = e => { f.q = e.target.value; redraw(); };
-    bindChips('dbkind', v => { f.kind = v; redraw(); });
-    document.getElementById('styleFilter').onchange = e => { f.style = e.target.value; redraw(); };
-  }, () => {
-    const gallery = `<div class="card dbfish"><h2 style="margin:0">Galerie „je to rybka“</h2>
-      <div class="muted small">${refs(null, false)} vzorů rybky (${refs('seed', false)} výchozích, ${refs('sticker', false)} z nalepených, ${refs('catch', false)} z úlovků)
-        · ${refs(null, true)} vzorů „není rybka“. Podle nich se pozná, jestli je na fotce vůbec rybka.</div>
-      ${data.negatives.length ? `<div class="samples">${data.negatives.map(n => `<div class="sample">
-        <img loading="lazy" src="${originImage(n.origin)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'noimg', textContent: 'bez fotky'}))">
-        <div class="meta"><span class="pill bad">není rybka</span><span class="muted">${when(n.created)}</span>
-          <button data-act="ref_positive" data-id="${esc(n.origin)}" data-done="Vráceno mezi rybky">Je to rybka</button></div></div>`).join('')}</div>` : ''}</div>`;
-    const list = data.stickers.filter(st => (f.kind === 'all' || kindOf(st.env) === f.kind) && styleMatch(st, f.style) &&
-      matches(f.q, st.fish_name, st.fish, st.name, st.author, ...data.samples.filter(x => x.stickerId === st.id).map(x => x.finder)));
-    return gallery + (list.map(st => {
-      const samples = data.samples.filter(x => x.stickerId === st.id);
-      const used = samples.filter(x => !x.excluded && x.hasImage).length + (st.hasImage ? 1 : 0);
-      return `<div class="card dbfish">
-        <div class="row"><h2 style="margin:0" class="grow">${esc(st.fish_name || st.fish)} ${rarity(st.rarity)}</h2>
-          ${st.status === 'active' ? '' : '<span class="pill bad">vypnutá</span>'}</div>
-        <div class="muted small">${esc(styleLabel(st))} · „${esc(st.name)}“ · ${esc(ENV[st.env] || st.env)} · od ${esc(st.author)} ·
-          pozná se z ${used} ${used === 1 ? 'fotky' : 'fotek'}${st.env === 'tetovani' ? ' (podle kresby)' : ` a ${st.contextCount ?? 0} otisků okolí`}</div>
-        <div class="samples">
-          <div class="sample original">${st.hasImage ? `<a href="/admin/image/sticker/${st.id}" target="_blank"><img loading="lazy" src="/admin/image/sticker/${st.id}" alt=""></a>` : '<div class="noimg">bez fotky</div>'}
-            <div class="meta"><b>Originál</b><span class="muted">${esc(st.author)} · ${when(st.created)}</span></div></div>
-          ${samples.map(x => `<div class="sample ${x.excluded ? 'off' : ''}">
-            ${x.hasImage ? `<a href="/admin/image/catch/${x.id}" target="_blank"><img loading="lazy" src="/admin/image/catch/${x.id}" alt=""></a>` : '<div class="noimg">bez fotky</div>'}
-            <div class="meta"><b>${esc(x.finder)}</b><span class="muted">${match(x)} · ${when(x.time)}</span>
-              ${x.excluded ? `<span class="pill warn">vyřazená</span><button data-act="sample_include" data-id="${x.id}" data-done="Fotka je zase mezi vzory">Vrátit mezi vzory</button>`
-                : `<button data-act="sample_exclude" data-id="${x.id}" data-done="Fotka vyřazená ze vzorů">Vyřadit ze vzorů</button>`}
-              <button class="danger" data-act="catch_wrong_fish" data-id="${x.id}" data-done="Úlovek zrušen"
-                data-confirm="Na fotce je jiná rybka? ${esc(x.finder)} a autor přijdou o body za tenhle úlovek a fotka se vyřadí ze vzorů.">Jiná rybka</button></div></div>`).join('')}
-        </div></div>`;
-    }).join('') || '<div class="card empty">Žádná rybka neodpovídá filtru.</div>');
-  });
-}
-
 function adjustmentsTab() {
   app.innerHTML = `<div class="toolbar"><span class="muted grow">Ruční úpravy bodů. Body hráči upravíš v záložce Hráči.</span></div>` +
     (data.adjustments.length ? `<div class="table"><table><tr><th>Kdy</th><th>Hráč</th><th class="num">Změna</th><th>Důvod</th></tr>
@@ -665,26 +656,28 @@ function keyTab() {
 }
 
 /** Tlačítka v seznamu (po každém překreslení). */
-function bindList() {
-  app.querySelectorAll('[data-act]').forEach(b => b.onclick = () =>
+function bindList() { bindActions(app); }
+function bindActions(root) {
+  root.querySelectorAll('[data-open-fish]').forEach(card => card.onclick = () => openFish(card.dataset.openFish));
+  root.querySelectorAll('[data-act]').forEach(b => b.onclick = () =>
     act({action: b.dataset.act, id: b.dataset.id}, {confirmText: b.dataset.confirm, done: b.dataset.done, button: b}));
-  app.querySelectorAll('[data-save-coords]').forEach(b => b.onclick = () => {
+  root.querySelectorAll('[data-save-coords]').forEach(b => b.onclick = () => {
     const id = b.dataset.saveCoords;
-    act({action: 'set_position', id, coords: app.querySelector(`[data-coords="${id}"]`).value}, {done: 'Poloha uložená', button: b});
+    act({action: 'set_position', id, coords: root.querySelector(`[data-coords="${id}"]`).value}, {done: 'Poloha uložená', button: b});
   });
-  app.querySelectorAll('[data-rename]').forEach(b => b.onclick = () => {
+  root.querySelectorAll('[data-rename]').forEach(b => b.onclick = () => {
     const id = b.dataset.rename;
-    const name = b.dataset.random ? '' : app.querySelector(`[data-fish-name="${id}"]`).value.trim();
+    const name = b.dataset.random ? '' : root.querySelector(`[data-fish-name="${id}"]`).value.trim();
     if (!b.dataset.random && !name) return toast('Napiš jméno, nebo ho vylosuj 🎲', true);
     act({action: 'rename_fish', id, name}, {done: b.dataset.random ? 'Vylosováno nové jméno' : 'Přejmenováno', button: b});
   });
-  app.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => act({action: 'reset_password', id: b.dataset.reset},
+  root.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => act({action: 'reset_password', id: b.dataset.reset},
     {confirmText: 'Hráč si nastaví nové heslo prvním přihlášením. Pokračovat?', done: 'Heslo resetováno', button: b}));
-  app.querySelectorAll('[data-delete-user]').forEach(b => b.onclick = () => act({action: 'delete_user', id: b.dataset.deleteUser},
+  root.querySelectorAll('[data-delete-user]').forEach(b => b.onclick = () => act({action: 'delete_user', id: b.dataset.deleteUser},
     {confirmText: 'Smazat prázdný účet?', done: 'Účet smazán', button: b}));
-  app.querySelectorAll('[data-style-of]').forEach(sel => sel.onchange = () =>
+  root.querySelectorAll('[data-style-of]').forEach(sel => sel.onchange = () =>
     act({action: 'sticker_style', id: sel.dataset.styleOf, style: sel.value || null}, {done: 'Styl uložen'}));
-  app.querySelectorAll('[data-points]').forEach(b => b.onclick = () => openPoints(data.users.find(u => String(u.id) === b.dataset.points)));
+  root.querySelectorAll('[data-points]').forEach(b => b.onclick = () => openPoints(data.users.find(u => String(u.id) === b.dataset.points)));
 }
 
 // --- úprava bodů ---------------------------------------------------------------
@@ -742,6 +735,7 @@ async function refresh() {
   render();
   open.forEach(id => app.querySelector(`[data-fish-name="${id}"]`)?.closest('details')?.setAttribute('open', ''));
   scrollTo(0, y);
+  if (openFishId) drawFish();
 }
 
 async function start() {

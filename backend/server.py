@@ -260,10 +260,13 @@ def init_db():
         add_column(conn, "stickers", "context", "TEXT")
         add_column(conn, "stickers", "style_id", "INTEGER REFERENCES styles(id) ON DELETE SET NULL")
         # Index stylu je kód SxPxVxUxOxxx složený z čísel: číslo stylu, ploutve (1–3), vybarvení (1/0),
-        # úsměv (-9 smutná … 0 … +9 usměvavá) a oko (víčko 1/0, obočí 1/0, kam kouká: U/D/F/B/C).
+        # úsměv (-9 smutná … 0 … +9 usměvavá) a oko (víčko 1/0, obočí 1/0, kam kouká: L/R/C/U/D).
         for column in ("num", "fin_count", "filled", "smile", "lid", "brow"):
             add_column(conn, "styles", column, "INTEGER")
-        add_column(conn, "styles", "gaze", "TEXT")  # JSON: otisky okolí (originál + úlovky)
+        add_column(conn, "styles", "gaze", "TEXT")
+        # Titulní fotka rybky v adminu: ze všech jejích fotek ta, která se nejvíc shoduje s ostatními
+        # („sticker:ID“ nebo „catch:ID“). NULL = spočítat znovu (přibyl nebo ubyl vzorek).
+        add_column(conn, "stickers", "cover", "TEXT")  # JSON: otisky okolí (originál + úlovky)
         add_column(conn, "catches", "context", "TEXT")   # co úlovek přidal do okolí samolepky (kvůli odebrání)
         add_column(conn, "catches", "inliers", "INTEGER")  # u tetování: kolik bodů kresby sedělo
         # Admin může fotku úlovku vyřadit ze vzorů rybky (třeba když to byla jiná rybka).
@@ -1275,7 +1278,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         self.conn.execute("UPDATE catches SET image = ?, context = ? WHERE id = ?", (image, json.dumps(added), catch_id))
         add_ref(self.conn, crops[0], "catch", f"catch:{catch_id}")
         self.conn.execute(
-            "UPDATE stickers SET embeddings = ?, context = ? WHERE id = ?",
+            "UPDATE stickers SET embeddings = ?, context = ?, cover = NULL WHERE id = ?",
             (json.dumps((shots + [rounded(crops[0])])[-MAX_STICKER_SHOTS:]),
              json.dumps(keep_originals(sticker_context(row) + added)), sid),
         )
