@@ -258,7 +258,12 @@ def init_db():
         add_column(conn, "stickers", "image", "TEXT")
         add_column(conn, "stickers", "fish_name", "TEXT")
         add_column(conn, "stickers", "context", "TEXT")
-        add_column(conn, "stickers", "style_id", "INTEGER REFERENCES styles(id) ON DELETE SET NULL")  # JSON: otisky okolí (originál + úlovky)
+        add_column(conn, "stickers", "style_id", "INTEGER REFERENCES styles(id) ON DELETE SET NULL")
+        # Index stylu je kód SxPxVxUxOxxx složený z čísel: číslo stylu, ploutve (1–3), vybarvení (1/0),
+        # úsměv (-9 smutná … 0 … +9 usměvavá) a oko (víčko 1/0, obočí 1/0, kam kouká: U/D/F/B/C).
+        for column in ("num", "fin_count", "filled", "smile", "lid", "brow"):
+            add_column(conn, "styles", column, "INTEGER")
+        add_column(conn, "styles", "gaze", "TEXT")  # JSON: otisky okolí (originál + úlovky)
         add_column(conn, "catches", "context", "TEXT")   # co úlovek přidal do okolí samolepky (kvůli odebrání)
         add_column(conn, "catches", "inliers", "INTEGER")  # u tetování: kolik bodů kresby sedělo
         # Admin může fotku úlovku vyřadit ze vzorů rybky (třeba když to byla jiná rybka).

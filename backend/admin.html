@@ -325,8 +325,8 @@ function tabs() {
     ['hraci', 'Hráči', data.users.length],
     ['rybky', 'Rybky', data.stickers.length],
     ['ulovky', 'Úlovky', data.catches.filter(c => c.accepted).length],
-    ['styly', 'Index stylů', data.styles.length],
     ['databaze', 'Databáze', data.samples.length + data.stickers.filter(x => x.hasImage).length],
+    ['styly', 'Index stylů', data.styles.length],
     ['body', 'Úpravy bodů', data.adjustments.length],
     ['klic', 'Klíč'],
   ];
@@ -359,10 +359,10 @@ function bindChips(name, onPick) {
 }
 // Styl rybky z indexu (kresba + podoba samolepky).
 const styleOf = st => data.styles.find(x => x.id === st.styleId);
-const styleLabel = st => { const x = styleOf(st); return x ? `${x.code} · ${x.name}` : 'nezařazená'; };
+const styleLabel = st => { const x = styleOf(st); return x ? x.code : 'nezařazená'; };
 const styleSelect = (value, attrs = '') => `<select ${attrs}><option value="all" ${value === 'all' ? 'selected' : ''}>Všechny styly</option>
   <option value="none" ${value === 'none' ? 'selected' : ''}>Nezařazené</option>
-  ${data.styles.map(x => `<option value="${x.id}" ${String(value) === String(x.id) ? 'selected' : ''}>${esc(x.code)} · ${esc(x.name)}</option>`).join('')}</select>`;
+  ${data.styles.map(x => `<option value="${x.id}" ${String(value) === String(x.id) ? 'selected' : ''}>${esc(x.code)}${x.note ? ` – ${esc(x.note)}` : ''}</option>`).join('')}</select>`;
 const styleMatch = (st, v) => !v || v === 'all' || (v === 'none' ? !st.styleId : String(st.styleId) === String(v));
 const matches = (q, ...fields) => !q || fields.some(f => String(f ?? '').toLowerCase().includes(q.toLowerCase()));
 
@@ -465,7 +465,7 @@ function fishTab() {
           <div class="row small"><span class="muted">Styl</span>
             <select data-style-of="${st.id}" style="flex:1;min-width:0;padding:4px 8px">
               <option value="">nezařazená</option>
-              ${data.styles.map(x => `<option value="${x.id}" ${x.id === st.styleId ? 'selected' : ''}>${esc(x.code)} · ${esc(x.name)}</option>`).join('')}
+              ${data.styles.map(x => `<option value="${x.id}" ${x.id === st.styleId ? 'selected' : ''}>${esc(x.code)}${x.note ? ` – ${esc(x.note)}` : ''}</option>`).join('')}
             </select></div>
           <div>„${esc(st.name || '—')}“ <span class="muted">od ${esc(st.author)}</span></div>
           ${st.hint ? `<div class="muted small">Nápověda: „${esc(st.hint)}“</div>` : ''}
@@ -521,24 +521,31 @@ function catchesTab() {
   });
 }
 
-// Index stylů: jak vypadají samolepky (kresba, podklad, barva) a jejich znaky. Rybky se do stylů řadí v záložce Rybky.
-const FINS = ['horní', 'dolní', 'ocasní', 'břišní', 'prsní'];
-const GAZE = ['dopředu', 'nahoru', 'dolů', 'dozadu', 'na diváka'];
+// Index stylů: každá kresba ryby má kód SxPxVxUxOxxx složený z čísel (vysvětlení v legendě nahoře).
+const GAZE = {U: 'nahoru', D: 'dolů', F: 'dopředu', B: 'dozadu', C: 'na diváka'};
+const smileText = n => n > 0 ? `usměvavá +${n}` : n < 0 ? `smutná ${n}` : 'neutrální 0';
+const codeOf = v => `S${v.num}P${v.fins}V${v.filled ? 1 : 0}U${v.smile > 0 ? '+' : ''}${v.smile}O${v.lid ? 1 : 0}${v.brow ? 1 : 0}${v.gaze}`;
+const decode = x => [`${plural(x.fins, 'ploutev', 'ploutve', 'ploutví')}`, x.filled ? 'vybarvená' : 'jen obrys', smileText(x.smile),
+  `oko ${x.lid ? 's víčkem' : 'bez víčka'}, ${x.brow ? 's obočím' : 'bez obočí'}, kouká ${GAZE[x.gaze] || '?'}`].join(' · ');
+const LEGEND = `<div class="card" style="display:grid;gap:10px;margin-bottom:16px">
+  <h2 style="margin:0">Jak číst kód stylu</h2>
+  <div style="font:700 22px/1 ui-monospace,monospace;letter-spacing:.04em">S2 P3 V1 U+2 O10F</div>
+  <div class="tiles" style="margin:0;grid-template-columns:repeat(auto-fill,minmax(170px,1fr))">
+    <div><b>S</b> číslo stylu<div class="muted small">pořadí v indexu</div></div>
+    <div><b>P</b> ploutve 1–3<div class="muted small">kolik jich ryba má (standard horní, dolní, ocasní = 3)</div></div>
+    <div><b>V</b> vybarvení 1 / 0<div class="muted small">1 = něco je vyplněné, 0 = jen obrys</div></div>
+    <div><b>U</b> úsměv −9 … +9<div class="muted small">minus smutná, 0 neutrální, plus usměvavá; číslo = jak moc</div></div>
+    <div><b>O</b> oko: víčko, obočí, pohled<div class="muted small">1/0 víčko, 1/0 obočí, směr: U nahoru, D dolů, F dopředu, B dozadu, C na diváka</div></div>
+  </div></div>`;
 function stylesTab() {
-  const yes = v => v ? 'ano' : 'ne';
-  app.innerHTML = `<div class="toolbar"><span class="muted grow">Styl = kresba ryby a podoba samolepky. Každá rybka má svůj styl,
-      vybereš ho u ní v záložce Rybky.</span><button class="primary" id="newStyle">Nový styl</button></div>
+  app.innerHTML = `<div class="toolbar"><span class="muted grow">Každá rybka má styl; vybereš ho u ní v záložce Rybky.</span>
+      <button class="primary" id="newStyle">Nový styl</button></div>${LEGEND}
     <div class="grid">${data.styles.map(x => `<div class="fish">
-      <div class="photo">${x.sampleSticker ? `<img loading="lazy" src="/admin/image/sticker/${x.sampleSticker}" alt="">` : 'zatím bez rybky'}
-        <span class="pill" style="--c:var(--primary)">${esc(x.code)}</span></div>
+      <div class="photo">${x.sampleSticker ? `<img loading="lazy" src="/admin/image/sticker/${x.sampleSticker}" alt="">` : 'zatím bez rybky'}</div>
       <div class="body">
-        <div class="row"><h3 class="grow">${esc(x.name)}</h3><span class="muted small">${plural(x.count, 'rybka', 'rybky', 'rybek')}</span></div>
-        ${x.look ? `<div class="muted small">${esc(x.look)}</div>` : ''}
-        <div class="small"><b>Ploutve:</b> ${x.fins.length ? `${x.fins.length} (${esc(x.fins.join(', '))})` : '—'}</div>
-        <div class="small"><b>Bubliny:</b> ${yes(x.bubbles)}</div>
-        <div class="small"><b>Vybarvení:</b> ${esc(x.coloring || '—')}</div>
-        <div class="small"><b>Výraz:</b> ${esc(x.expression || '—')}</div>
-        <div class="small"><b>Oko:</b> víčka ${yes(x.eye.lids)}, obočí ${yes(x.eye.brows)}${x.eye.gaze ? `, kouká ${esc(x.eye.gaze)}` : ''}</div>
+        <div class="row"><h3 class="grow" style="font-family:ui-monospace,monospace">${esc(x.code)}</h3>
+          <span class="muted small">${plural(x.count, 'rybka', 'rybky', 'rybek')}</span></div>
+        <div class="small">${esc(decode(x))}</div>
         ${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ''}
         <div class="actions"><button data-edit-style="${x.id}">Upravit</button>
           <button data-show-style="${x.id}">Ukázat rybky</button>
@@ -554,36 +561,37 @@ function stylesTab() {
 }
 
 const styleDlg = document.getElementById('styleDlg');
-let editedStyle = null;
 function openStyle(x) {
-  editedStyle = x;
-  const v = x || {fins: ['horní', 'dolní', 'ocasní'], eye: {}, bubbles: 0};
+  const v = x || {num: Math.max(0, ...data.styles.map(s => s.num || 0)) + 1, fins: 3, filled: 0, smile: 0, lid: 0, brow: 0, gaze: 'F'};
   const form = document.getElementById('styleForm');
-  form.innerHTML = `<h2>${x ? `Styl ${esc(x.code)}` : 'Nový styl'}</h2>
-    <div class="row" style="flex-wrap:nowrap"><input name="code" placeholder="Označení (S1)" value="${esc(v.code || '')}" maxlength="12" style="width:110px">
-      <input name="name" placeholder="Název (Potápěč hnědý)" value="${esc(v.name || '')}" maxlength="40" style="flex:1"></div>
-    <input name="look" placeholder="Podoba samolepky – podklad a barva (bílý ovál, hnědá kresba)" value="${esc(v.look || '')}">
-    <div><b class="small">Ploutve</b><div class="chips">${FINS.map(f => `<label class="chip"><input type="checkbox" name="fins" value="${f}"
-      ${v.fins.includes(f) ? 'checked' : ''}> ${f}</label>`).join('')}</div></div>
-    <label class="chip" style="justify-self:start"><input type="checkbox" name="bubbles" ${v.bubbles ? 'checked' : ''}> bubliny</label>
-    <input name="coloring" placeholder="Vybarvení – co je vyplněné a co obrys" value="${esc(v.coloring || '')}">
-    <input name="expression" placeholder="Výraz (úsměv, úšklebek…)" value="${esc(v.expression || '')}">
-    <div><b class="small">Oko</b><div class="chips">
-      <label class="chip"><input type="checkbox" name="lids" ${v.eye.lids ? 'checked' : ''}> víčka</label>
-      <label class="chip"><input type="checkbox" name="brows" ${v.eye.brows ? 'checked' : ''}> obočí</label>
-      <select name="gaze"><option value="">kam kouká…</option>${GAZE.map(g => `<option ${v.eye.gaze === g ? 'selected' : ''}>${g}</option>`).join('')}</select>
+  form.innerHTML = `<h2>${x ? 'Upravit styl' : 'Nový styl'}</h2>
+    <div class="preview" style="font:700 22px/1.2 ui-monospace,monospace;text-align:center" id="codePreview"></div>
+    <label class="small"><b>S</b> číslo stylu <input name="num" type="number" min="1" max="999" value="${v.num}" style="width:90px;margin-left:8px"></label>
+    <div><b class="small">P</b> <span class="small">ploutve</span><div class="chips">${[1, 2, 3].map(n =>
+      `<label class="chip"><input type="radio" name="fins" value="${n}" ${v.fins === n ? 'checked' : ''}> ${n}</label>`).join('')}</div></div>
+    <div><b class="small">V</b> <span class="small">vybarvení</span><div class="chips">
+      <label class="chip"><input type="radio" name="filled" value="0" ${!v.filled ? 'checked' : ''}> 0 – jen obrys</label>
+      <label class="chip"><input type="radio" name="filled" value="1" ${v.filled ? 'checked' : ''}> 1 – něco vyplněné</label></div></div>
+    <div><b class="small">U</b> <span class="small">úsměv: <span id="smileVal"></span></span>
+      <input name="smile" type="range" min="-9" max="9" step="1" value="${v.smile}" style="width:100%;padding:0"></div>
+    <div><b class="small">O</b> <span class="small">oko</span><div class="chips">
+      <label class="chip"><input type="checkbox" name="lid" ${v.lid ? 'checked' : ''}> víčko</label>
+      <label class="chip"><input type="checkbox" name="brow" ${v.brow ? 'checked' : ''}> obočí</label>
+      <select name="gaze">${Object.entries(GAZE).map(([k, n]) => `<option value="${k}" ${v.gaze === k ? 'selected' : ''}>${k} – kouká ${n}</option>`).join('')}</select>
     </div></div>
-    <input name="note" placeholder="Poznámka" value="${esc(v.note || '')}">
+    <input name="note" placeholder="Poznámka – podoba samolepky (černý ovál, bílá kresba…)" value="${esc(v.note || '')}">
     <div class="error" id="styleErr"></div>
     <div class="dlg-actions"><button type="button" class="ghost" id="styleCancel">Zrušit</button><button class="primary">Uložit</button></div>`;
+  const values = () => { const fd = new FormData(form); return {num: +fd.get('num'), fins: +fd.get('fins'), filled: fd.get('filled') === '1',
+    smile: +fd.get('smile'), lid: fd.has('lid'), brow: fd.has('brow'), gaze: fd.get('gaze'), note: fd.get('note')}; };
+  const preview = () => { const w = values(); document.getElementById('codePreview').textContent = codeOf(w);
+    document.getElementById('smileVal').textContent = smileText(w.smile); };
+  form.oninput = preview; preview();
   document.getElementById('styleCancel').onclick = () => styleDlg.close();
   form.onsubmit = async e => {
     e.preventDefault();
-    const fd = new FormData(form);
     try {
-      await api('action', {action: 'style_save', id: x?.id, code: fd.get('code'), name: fd.get('name'), look: fd.get('look'),
-        fins: fd.getAll('fins'), bubbles: fd.has('bubbles'), coloring: fd.get('coloring'), expression: fd.get('expression'),
-        eye: {lids: fd.has('lids'), brows: fd.has('brows'), gaze: fd.get('gaze')}, note: fd.get('note')});
+      await api('action', {action: 'style_save', id: x?.id, ...values()});
       styleDlg.close(); await refresh(); toast('Styl uložen');
     } catch (err) { document.getElementById('styleErr').textContent = err.message; }
   };

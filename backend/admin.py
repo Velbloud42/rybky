@@ -61,6 +61,15 @@ def configure(db, images_dir, catch_points, author_points, new_fish_name, level_
             print(f"Admin: kód pro registraci prvního klíče na {ORIGIN}/admin: {code}", flush=True)
 
 
+# Kam ryba kouká: nahoru, dolů, dopředu (kam plave), dozadu, na diváka.
+GAZE = {"U": "nahoru", "D": "dolů", "F": "dopředu", "B": "dozadu", "C": "na diváka"}
+
+
+def style_code(num, fins, filled, smile, lid, brow, gaze):
+    """Index stylu, např. S2P3V1U+2O10F."""
+    return f"S{num}P{fins}V{filled}U{smile:+d}O{lid}{brow}{gaze}" if smile else f"S{num}P{fins}V{filled}U0O{lid}{brow}{gaze}"
+
+
 # Jedna souřadnice: stupně, volitelně minuty a vteřiny a světová strana (S a W jsou záporné).
 COORD = re.compile(r"""(-?\d+(?:\.\d+)?)\s*°?\s*(?:(\d+(?:\.\d+)?)\s*['′]\s*)?(?:(\d+(?:\.\d+)?)\s*["″]\s*)?([NSEWnsew])?""")
 
@@ -321,11 +330,11 @@ class AdminMixin:
                    FROM users u ORDER BY u.points DESC, u.created""")],
             "adjustments": q("""SELECT p.id, p.delta, p.reason, p.time, u.nick FROM point_adjustments p
                                 JOIN users u ON u.id = p.user_id ORDER BY p.time DESC LIMIT 200"""),
-            "styles": [{**st, "fins": json.loads(st["fins"] or "[]"), "eye": json.loads(st["eye"] or "{}")} for st in q(
-                """SELECT st.*, (SELECT COUNT(*) FROM stickers s WHERE s.style_id = st.id) AS count,
+            "styles": [{**st, "gazeName": GAZE.get(st["gaze"], "")} for st in q(
+                """SELECT st.id, st.code, st.num, st.fin_count AS fins, st.filled, st.smile, st.lid, st.brow, st.gaze, st.note, (SELECT COUNT(*) FROM stickers s WHERE s.style_id = st.id) AS count,
                           (SELECT s.id FROM stickers s WHERE s.style_id = st.id AND s.image IS NOT NULL
                            ORDER BY s.created LIMIT 1) AS sampleSticker
-                   FROM styles st ORDER BY st.code""")],
+                   FROM styles st ORDER BY st.num""")],
             "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created, s.style_id AS styleId,
                                     json_array_length(s.context) AS contextCount,
                                     s.image IS NOT NULL AS hasImage, a.nick AS author,
@@ -490,25 +499,32 @@ class AdminMixin:
             conn.execute("UPDATE stickers SET context = ? WHERE id = ?", (json.dumps(kept), c["sticker_id"]))
 
     def _save_style(self, data):
-        """Nový styl, nebo úprava existujícího (s „id“). Znaky jsou krátké texty, ploutve seznam, oko slovník."""
-        text = lambda key, limit=80: " ".join(str(data.get(key) or "").split())[:limit] or None  # noqa: E731
-        code, name = text("code", 12), text("name", 40)
-        if not code or not name:
-            raise AdminError(400, "Styl potřebuje označení i název")
-        fins = [str(f)[:20] for f in (data.get("fins") or []) if str(f).strip()][:8]
-        eye = data.get("eye") if isinstance(data.get("eye"), dict) else {}
-        eye = {"lids": bool(eye.get("lids")), "brows": bool(eye.get("brows")), "gaze": str(eye.get("gaze") or "")[:20]}
-        values = (code, name, text("look"), json.dumps(fins, ensure_ascii=False), int(bool(data.get("bubbles"))),
-                  text("coloring", 120), text("expression"), json.dumps(eye, ensure_ascii=False), text("note", 200))
-        try:
-            if data.get("id"):
-                self.conn.execute("""UPDATE styles SET code = ?, name = ?, look = ?, fins = ?, bubbles = ?, coloring = ?,
-                                     expression = ?, eye = ?, note = ? WHERE id = ?""", (*values, data["id"]))
-            else:
-                self.conn.execute("""INSERT INTO styles (code, name, look, fins, bubbles, coloring, expression, eye, note, created)
-                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (*values, time.time()))
-        except sqlite3.IntegrityError:
-            raise AdminError(409, f"Označení {code} už má jiný styl")
+        """Nový styl, nebo úprava existujícího (s „id“). Kód SxPxVxUxOxxx se skládá ze znaků sám."""
+        def number(key, low, high):
+            try:
+                value = int(data.get(key))
+            except (TypeError, ValueError):
+                raise AdminError(400, f"Chybí {key}")
+            if not low <= value <= high:
+                raise AdminError(400, f"{key} musí být {low} až {high}")
+            return value
+        num, fins, smile = number("num", 1, 999), number("fins", 1, 3), number("smile", -9, 9)
+        filled, lid, brow = (int(bool(data.get(k))) for k in ("filled", "lid", "brow"))
+        gaze = str(data.get("gaze") or "F")
+        if gaze not in GAZE:
+            raise AdminError(400, "Neznámý směr pohledu")
+        code = style_code(num, fins, filled, smile, lid, brow, gaze)
+        note = " ".join(str(data.get("note") or "").split())[:120] or None
+        taken = self.conn.execute("SELECT id FROM styles WHERE num = ? AND id != ?", (num, data.get("id") or 0)).fetchone()
+        if taken:
+            raise AdminError(409, f"Číslo S{num} už má jiný styl")
+        values = (code, "", num, fins, filled, smile, lid, brow, gaze, note)
+        if data.get("id"):
+            self.conn.execute("""UPDATE styles SET code = ?, name = ?, num = ?, fin_count = ?, filled = ?, smile = ?, lid = ?,
+                                 brow = ?, gaze = ?, note = ? WHERE id = ?""", (*values, data["id"]))
+        else:
+            self.conn.execute("""INSERT INTO styles (code, name, num, fin_count, filled, smile, lid, brow, gaze, note, created)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (*values, time.time()))
 
     def _delete_sticker(self, sticker_id):
         """Smaže rybku úplně: lovci i autor přijdou o body za její úlovky, zmizí úlovky, fotky
