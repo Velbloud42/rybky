@@ -230,6 +230,20 @@ def init_db():
                 time REAL NOT NULL,
                 PRIMARY KEY (user_id, achievement)
             );
+            -- Index stylů rybek: jak samolepka vypadá (kresba, podklad, barva) a podle čeho se pozná.
+            CREATE TABLE IF NOT EXISTS styles (
+                id INTEGER PRIMARY KEY,
+                code TEXT NOT NULL UNIQUE,     -- krátké označení, např. S2
+                name TEXT NOT NULL,            -- např. Potápěč hnědý
+                look TEXT,                     -- podklad a barva tisku
+                fins TEXT,                     -- JSON seznam ploutví: horní, dolní, ocasní…
+                bubbles INTEGER NOT NULL DEFAULT 0,
+                coloring TEXT,                 -- co je vybarvené a co jen obrys
+                expression TEXT,
+                eye TEXT,                      -- JSON {"lids": bool, "brows": bool, "gaze": "dopředu"…}
+                note TEXT,
+                created REAL NOT NULL
+            );
             -- Ruční úpravy bodů v adminu: kdo, kolik, kdy a proč.
             CREATE TABLE IF NOT EXISTS point_adjustments (
                 id INTEGER PRIMARY KEY,
@@ -243,7 +257,8 @@ def init_db():
         add_column(conn, "stickers", "name", "TEXT")
         add_column(conn, "stickers", "image", "TEXT")
         add_column(conn, "stickers", "fish_name", "TEXT")
-        add_column(conn, "stickers", "context", "TEXT")  # JSON: otisky okolí (originál + úlovky)
+        add_column(conn, "stickers", "context", "TEXT")
+        add_column(conn, "stickers", "style_id", "INTEGER REFERENCES styles(id) ON DELETE SET NULL")  # JSON: otisky okolí (originál + úlovky)
         add_column(conn, "catches", "context", "TEXT")   # co úlovek přidal do okolí samolepky (kvůli odebrání)
         add_column(conn, "catches", "inliers", "INTEGER")  # u tetování: kolik bodů kresby sedělo
         # Admin může fotku úlovku vyřadit ze vzorů rybky (třeba když to byla jiná rybka).

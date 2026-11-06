@@ -13,6 +13,7 @@ import math
 import os
 import re
 import secrets
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -320,7 +321,12 @@ class AdminMixin:
                    FROM users u ORDER BY u.points DESC, u.created""")],
             "adjustments": q("""SELECT p.id, p.delta, p.reason, p.time, u.nick FROM point_adjustments p
                                 JOIN users u ON u.id = p.user_id ORDER BY p.time DESC LIMIT 200"""),
-            "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created,
+            "styles": [{**st, "fins": json.loads(st["fins"] or "[]"), "eye": json.loads(st["eye"] or "{}")} for st in q(
+                """SELECT st.*, (SELECT COUNT(*) FROM stickers s WHERE s.style_id = st.id) AS count,
+                          (SELECT s.id FROM stickers s WHERE s.style_id = st.id AND s.image IS NOT NULL
+                           ORDER BY s.created LIMIT 1) AS sampleSticker
+                   FROM styles st ORDER BY st.code""")],
+            "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created, s.style_id AS styleId,
                                     json_array_length(s.context) AS contextCount,
                                     s.image IS NOT NULL AS hasImage, a.nick AS author,
                                     (SELECT COUNT(*) FROM catches c WHERE c.sticker_id = s.id AND c.accepted = 1) AS finds,
@@ -401,6 +407,17 @@ class AdminMixin:
             conn.execute("UPDATE users SET points = points + ? WHERE id = ?", (delta, ident))
             conn.execute("INSERT INTO point_adjustments (user_id, delta, reason, time) VALUES (?, ?, ?, ?)",
                          (ident, delta, reason, time.time()))
+        elif action == "style_save":
+            self._save_style(data)
+        elif action == "style_delete":
+            # Rybky stylu zůstanou, jen budou nezařazené.
+            conn.execute("UPDATE stickers SET style_id = NULL WHERE style_id = ?", (ident,))
+            conn.execute("DELETE FROM styles WHERE id = ?", (ident,))
+        elif action == "sticker_style":
+            style = data.get("style")
+            if style not in (None, "") and not conn.execute("SELECT 1 FROM styles WHERE id = ?", (style,)).fetchone():
+                raise AdminError(404, "Takový styl není")
+            conn.execute("UPDATE stickers SET style_id = ? WHERE id = ?", (style or None, ident))
         elif action == "rename_fish":
             # Prázdné jméno = vylosovat nové.
             if not conn.execute("SELECT 1 FROM stickers WHERE id = ?", (ident,)).fetchone():
@@ -471,6 +488,27 @@ class AdminMixin:
         kept = [e for e in current if e not in added] + (added if use else [])
         if kept:
             conn.execute("UPDATE stickers SET context = ? WHERE id = ?", (json.dumps(kept), c["sticker_id"]))
+
+    def _save_style(self, data):
+        """Nový styl, nebo úprava existujícího (s „id“). Znaky jsou krátké texty, ploutve seznam, oko slovník."""
+        text = lambda key, limit=80: " ".join(str(data.get(key) or "").split())[:limit] or None  # noqa: E731
+        code, name = text("code", 12), text("name", 40)
+        if not code or not name:
+            raise AdminError(400, "Styl potřebuje označení i název")
+        fins = [str(f)[:20] for f in (data.get("fins") or []) if str(f).strip()][:8]
+        eye = data.get("eye") if isinstance(data.get("eye"), dict) else {}
+        eye = {"lids": bool(eye.get("lids")), "brows": bool(eye.get("brows")), "gaze": str(eye.get("gaze") or "")[:20]}
+        values = (code, name, text("look"), json.dumps(fins, ensure_ascii=False), int(bool(data.get("bubbles"))),
+                  text("coloring", 120), text("expression"), json.dumps(eye, ensure_ascii=False), text("note", 200))
+        try:
+            if data.get("id"):
+                self.conn.execute("""UPDATE styles SET code = ?, name = ?, look = ?, fins = ?, bubbles = ?, coloring = ?,
+                                     expression = ?, eye = ?, note = ? WHERE id = ?""", (*values, data["id"]))
+            else:
+                self.conn.execute("""INSERT INTO styles (code, name, look, fins, bubbles, coloring, expression, eye, note, created)
+                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (*values, time.time()))
+        except sqlite3.IntegrityError:
+            raise AdminError(409, f"Označení {code} už má jiný styl")
 
     def _delete_sticker(self, sticker_id):
         """Smaže rybku úplně: lovci i autor přijdou o body za její úlovky, zmizí úlovky, fotky

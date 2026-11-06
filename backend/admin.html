@@ -58,6 +58,8 @@
   .toolbar input[type=search] { flex: 1 1 220px; max-width: 360px; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .chip { border-radius: 99px; padding: 6px 12px; background: var(--surface); border: 1px solid transparent; color: var(--text); }
+  label.chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .chip input, dialog .chip input { width: auto; margin: 0; padding: 0; }
   .chip.on { background: var(--primary-container); color: var(--on-primary-container); border-color: transparent; font-weight: 700; }
 
   .card { background: var(--surface); border-radius: 20px; padding: 18px; }
@@ -163,6 +165,7 @@
 </header>
 <main id="app"><p class="muted">Načítám…</p></main>
 
+<dialog id="styleDlg" style="width:min(520px, calc(100vw - 32px))"><form method="dialog" id="styleForm"></form></dialog>
 <dialog id="pointsDlg">
   <form method="dialog" id="pointsForm">
     <h2 id="pointsTitle"></h2>
@@ -190,7 +193,7 @@ const logoutBtn = document.getElementById('logout');
 let data = null;
 // Záložka a filtry se pamatují v prohlížeči (když to jde).
 const state = Object.assign({tab: 'prehled', players: {q: ''}, fish: {status: 'all', kind: 'all', q: ''}, catches: {result: 'all', q: ''},
-                             db: {kind: 'all', q: ''}},
+                             db: {kind: 'all', q: '', style: 'all'}},
   (() => { try { return JSON.parse(localStorage.getItem('rybky-admin')) || {}; } catch { return {}; } })());
 const save = () => { try { localStorage.setItem('rybky-admin', JSON.stringify(state)); } catch {} };
 // Registrační kód jde předat v adrese (#code=…); hned se z ní smaže, ať nezůstane v historii.
@@ -322,6 +325,7 @@ function tabs() {
     ['hraci', 'Hráči', data.users.length],
     ['rybky', 'Rybky', data.stickers.length],
     ['ulovky', 'Úlovky', data.catches.filter(c => c.accepted).length],
+    ['styly', 'Index stylů', data.styles.length],
     ['databaze', 'Databáze', data.samples.length + data.stickers.filter(x => x.hasImage).length],
     ['body', 'Úpravy bodů', data.adjustments.length],
     ['klic', 'Klíč'],
@@ -334,7 +338,7 @@ function render() {
   tabsEl.innerHTML = tabs().map(([id, label, n]) =>
     `<button data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${label}${n != null ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   tabsEl.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { state.tab = b.dataset.tab; save(); render(); scrollTo(0, 0); });
-  ({prehled: overviewTab, hraci: playersTab, rybky: fishTab, ulovky: catchesTab, databaze: databaseTab, body: adjustmentsTab, klic: keyTab})[state.tab]();
+  ({prehled: overviewTab, hraci: playersTab, rybky: fishTab, ulovky: catchesTab, styly: stylesTab, databaze: databaseTab, body: adjustmentsTab, klic: keyTab})[state.tab]();
 }
 
 /** Lišta s hledáním a filtry nad seznamem; při psaní se překreslí jen seznam, ať hledání neztratí fokus. */
@@ -353,6 +357,13 @@ function bindChips(name, onPick) {
     box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); onPick(b.dataset.v);
   });
 }
+// Styl rybky z indexu (kresba + podoba samolepky).
+const styleOf = st => data.styles.find(x => x.id === st.styleId);
+const styleLabel = st => { const x = styleOf(st); return x ? `${x.code} · ${x.name}` : 'nezařazená'; };
+const styleSelect = (value, attrs = '') => `<select ${attrs}><option value="all" ${value === 'all' ? 'selected' : ''}>Všechny styly</option>
+  <option value="none" ${value === 'none' ? 'selected' : ''}>Nezařazené</option>
+  ${data.styles.map(x => `<option value="${x.id}" ${String(value) === String(x.id) ? 'selected' : ''}>${esc(x.code)} · ${esc(x.name)}</option>`).join('')}</select>`;
+const styleMatch = (st, v) => !v || v === 'all' || (v === 'none' ? !st.styleId : String(st.styleId) === String(v));
 const matches = (q, ...fields) => !q || fields.some(f => String(f ?? '').toLowerCase().includes(q.toLowerCase()));
 
 // Přehled: čísla, poslední dění a co stojí za kontrolu.
@@ -430,16 +441,18 @@ function fishTab() {
   const f = state.fish;
   withToolbar(searchBox(f.q, 'Hledat jméno, místo, autora…') +
     chips('status', [['all', 'Vše'], ['active', 'Aktivní'], ['off', 'Vypnuté']], f.status) +
-    chips('kind', [['all', 'Všechny druhy'], ['sticker', 'Samolepky'], ['tattoo', 'Tetování'], ['object', 'Předměty']], f.kind),
+    chips('kind', [['all', 'Všechny druhy'], ['sticker', 'Samolepky'], ['tattoo', 'Tetování'], ['object', 'Předměty']], f.kind) +
+    styleSelect(f.style || 'all', 'id="styleFilter"'),
   redraw => {
     document.getElementById('q').oninput = e => { f.q = e.target.value; redraw(); };
     bindChips('status', v => { f.status = v; redraw(); });
     bindChips('kind', v => { f.kind = v; redraw(); });
+    document.getElementById('styleFilter').onchange = e => { f.style = e.target.value; redraw(); };
   }, () => {
     const list = data.stickers.filter(st =>
       (f.status === 'all' || (f.status === 'active') === (st.status === 'active')) &&
-      (f.kind === 'all' || kindOf(st.env) === f.kind) &&
-      matches(f.q, st.fish_name, st.fish, st.name, st.author, st.hint, st.id));
+      (f.kind === 'all' || kindOf(st.env) === f.kind) && styleMatch(st, f.style) &&
+      matches(f.q, st.fish_name, st.fish, st.name, st.author, st.hint, st.id, styleLabel(st)));
     if (!list.length) return '<div class="card empty">Žádná rybka neodpovídá filtru.</div>';
     return `<div class="grid">${list.map(st => {
       const on = st.status === 'active';
@@ -449,6 +462,11 @@ function fishTab() {
         <div class="body">
           <div class="row"><h3 class="grow">${esc(st.fish_name || st.fish)}</h3>${rarity(st.rarity)}</div>
           <div class="muted small">${esc(st.fish)} · ${esc(ENV[st.env] || st.env)}</div>
+          <div class="row small"><span class="muted">Styl</span>
+            <select data-style-of="${st.id}" style="flex:1;min-width:0;padding:4px 8px">
+              <option value="">nezařazená</option>
+              ${data.styles.map(x => `<option value="${x.id}" ${x.id === st.styleId ? 'selected' : ''}>${esc(x.code)} · ${esc(x.name)}</option>`).join('')}
+            </select></div>
           <div>„${esc(st.name || '—')}“ <span class="muted">od ${esc(st.author)}</span></div>
           ${st.hint ? `<div class="muted small">Nápověda: „${esc(st.hint)}“</div>` : ''}
           <div class="small">${st.finds ? `Ulovena ${st.finds}× · <span class="muted">${esc(st.finders)}</span>` : '<span class="muted">Zatím ji nikdo neulovil</span>'}</div>
@@ -503,6 +521,75 @@ function catchesTab() {
   });
 }
 
+// Index stylů: jak vypadají samolepky (kresba, podklad, barva) a jejich znaky. Rybky se do stylů řadí v záložce Rybky.
+const FINS = ['horní', 'dolní', 'ocasní', 'břišní', 'prsní'];
+const GAZE = ['dopředu', 'nahoru', 'dolů', 'dozadu', 'na diváka'];
+function stylesTab() {
+  const yes = v => v ? 'ano' : 'ne';
+  app.innerHTML = `<div class="toolbar"><span class="muted grow">Styl = kresba ryby a podoba samolepky. Každá rybka má svůj styl,
+      vybereš ho u ní v záložce Rybky.</span><button class="primary" id="newStyle">Nový styl</button></div>
+    <div class="grid">${data.styles.map(x => `<div class="fish">
+      <div class="photo">${x.sampleSticker ? `<img loading="lazy" src="/admin/image/sticker/${x.sampleSticker}" alt="">` : 'zatím bez rybky'}
+        <span class="pill" style="--c:var(--primary)">${esc(x.code)}</span></div>
+      <div class="body">
+        <div class="row"><h3 class="grow">${esc(x.name)}</h3><span class="muted small">${plural(x.count, 'rybka', 'rybky', 'rybek')}</span></div>
+        ${x.look ? `<div class="muted small">${esc(x.look)}</div>` : ''}
+        <div class="small"><b>Ploutve:</b> ${x.fins.length ? `${x.fins.length} (${esc(x.fins.join(', '))})` : '—'}</div>
+        <div class="small"><b>Bubliny:</b> ${yes(x.bubbles)}</div>
+        <div class="small"><b>Vybarvení:</b> ${esc(x.coloring || '—')}</div>
+        <div class="small"><b>Výraz:</b> ${esc(x.expression || '—')}</div>
+        <div class="small"><b>Oko:</b> víčka ${yes(x.eye.lids)}, obočí ${yes(x.eye.brows)}${x.eye.gaze ? `, kouká ${esc(x.eye.gaze)}` : ''}</div>
+        ${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ''}
+        <div class="actions"><button data-edit-style="${x.id}">Upravit</button>
+          <button data-show-style="${x.id}">Ukázat rybky</button>
+          <button class="danger" data-act="style_delete" data-id="${x.id}" data-done="Styl smazán"
+            data-confirm="Smazat styl ${esc(x.code)}? Jeho rybky zůstanou, jen budou nezařazené.">Smazat</button></div>
+      </div></div>`).join('') || '<div class="card empty">Zatím žádné styly.</div>'}</div>`;
+  document.getElementById('newStyle').onclick = () => openStyle(null);
+  app.querySelectorAll('[data-edit-style]').forEach(b => b.onclick = () => openStyle(data.styles.find(x => String(x.id) === b.dataset.editStyle)));
+  app.querySelectorAll('[data-show-style]').forEach(b => b.onclick = () => {
+    state.tab = 'rybky'; state.fish.style = b.dataset.showStyle; save(); render();
+  });
+  bindList();
+}
+
+const styleDlg = document.getElementById('styleDlg');
+let editedStyle = null;
+function openStyle(x) {
+  editedStyle = x;
+  const v = x || {fins: ['horní', 'dolní', 'ocasní'], eye: {}, bubbles: 0};
+  const form = document.getElementById('styleForm');
+  form.innerHTML = `<h2>${x ? `Styl ${esc(x.code)}` : 'Nový styl'}</h2>
+    <div class="row" style="flex-wrap:nowrap"><input name="code" placeholder="Označení (S1)" value="${esc(v.code || '')}" maxlength="12" style="width:110px">
+      <input name="name" placeholder="Název (Potápěč hnědý)" value="${esc(v.name || '')}" maxlength="40" style="flex:1"></div>
+    <input name="look" placeholder="Podoba samolepky – podklad a barva (bílý ovál, hnědá kresba)" value="${esc(v.look || '')}">
+    <div><b class="small">Ploutve</b><div class="chips">${FINS.map(f => `<label class="chip"><input type="checkbox" name="fins" value="${f}"
+      ${v.fins.includes(f) ? 'checked' : ''}> ${f}</label>`).join('')}</div></div>
+    <label class="chip" style="justify-self:start"><input type="checkbox" name="bubbles" ${v.bubbles ? 'checked' : ''}> bubliny</label>
+    <input name="coloring" placeholder="Vybarvení – co je vyplněné a co obrys" value="${esc(v.coloring || '')}">
+    <input name="expression" placeholder="Výraz (úsměv, úšklebek…)" value="${esc(v.expression || '')}">
+    <div><b class="small">Oko</b><div class="chips">
+      <label class="chip"><input type="checkbox" name="lids" ${v.eye.lids ? 'checked' : ''}> víčka</label>
+      <label class="chip"><input type="checkbox" name="brows" ${v.eye.brows ? 'checked' : ''}> obočí</label>
+      <select name="gaze"><option value="">kam kouká…</option>${GAZE.map(g => `<option ${v.eye.gaze === g ? 'selected' : ''}>${g}</option>`).join('')}</select>
+    </div></div>
+    <input name="note" placeholder="Poznámka" value="${esc(v.note || '')}">
+    <div class="error" id="styleErr"></div>
+    <div class="dlg-actions"><button type="button" class="ghost" id="styleCancel">Zrušit</button><button class="primary">Uložit</button></div>`;
+  document.getElementById('styleCancel').onclick = () => styleDlg.close();
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try {
+      await api('action', {action: 'style_save', id: x?.id, code: fd.get('code'), name: fd.get('name'), look: fd.get('look'),
+        fins: fd.getAll('fins'), bubbles: fd.has('bubbles'), coloring: fd.get('coloring'), expression: fd.get('expression'),
+        eye: {lids: fd.has('lids'), brows: fd.has('brows'), gaze: fd.get('gaze')}, note: fd.get('note')});
+      styleDlg.close(); await refresh(); toast('Styl uložen');
+    } catch (err) { document.getElementById('styleErr').textContent = err.message; }
+  };
+  styleDlg.showModal();
+}
+
 /** Shoda úlovku: u tetování počet shodných bodů kresby, jinak podobnost okolí. */
 const match = c => c.inliers != null ? `${c.inliers} b. kresby` : c.similarity != null ? Math.round(c.similarity * 100) + ' %' : '—';
 
@@ -512,10 +599,12 @@ function databaseTab() {
   const refs = (src, neg) => data.refCounts.filter(r => (src == null || r.source === src) && !!r.negative === neg).reduce((a, r) => a + r.n, 0);
   const originImage = o => o.startsWith('sticker:') ? `/admin/image/sticker/${o.slice(8)}` : `/admin/image/catch/${o.slice(6)}`;
   withToolbar(searchBox(f.q, 'Hledat rybku, místo, hráče…') +
-    chips('dbkind', [['all', 'Všechny'], ['tattoo', 'Tetování'], ['object', 'Předměty'], ['sticker', 'Samolepky']], f.kind),
+    chips('dbkind', [['all', 'Všechny'], ['tattoo', 'Tetování'], ['object', 'Předměty'], ['sticker', 'Samolepky']], f.kind) +
+    styleSelect(f.style || 'all', 'id="styleFilter"'),
   redraw => {
     document.getElementById('q').oninput = e => { f.q = e.target.value; redraw(); };
     bindChips('dbkind', v => { f.kind = v; redraw(); });
+    document.getElementById('styleFilter').onchange = e => { f.style = e.target.value; redraw(); };
   }, () => {
     const gallery = `<div class="card dbfish"><h2 style="margin:0">Galerie „je to rybka“</h2>
       <div class="muted small">${refs(null, false)} vzorů rybky (${refs('seed', false)} výchozích, ${refs('sticker', false)} z nalepených, ${refs('catch', false)} z úlovků)
@@ -524,7 +613,7 @@ function databaseTab() {
         <img loading="lazy" src="${originImage(n.origin)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className: 'noimg', textContent: 'bez fotky'}))">
         <div class="meta"><span class="pill bad">není rybka</span><span class="muted">${when(n.created)}</span>
           <button data-act="ref_positive" data-id="${esc(n.origin)}" data-done="Vráceno mezi rybky">Je to rybka</button></div></div>`).join('')}</div>` : ''}</div>`;
-    const list = data.stickers.filter(st => (f.kind === 'all' || kindOf(st.env) === f.kind) &&
+    const list = data.stickers.filter(st => (f.kind === 'all' || kindOf(st.env) === f.kind) && styleMatch(st, f.style) &&
       matches(f.q, st.fish_name, st.fish, st.name, st.author, ...data.samples.filter(x => x.stickerId === st.id).map(x => x.finder)));
     return gallery + (list.map(st => {
       const samples = data.samples.filter(x => x.stickerId === st.id);
@@ -532,7 +621,7 @@ function databaseTab() {
       return `<div class="card dbfish">
         <div class="row"><h2 style="margin:0" class="grow">${esc(st.fish_name || st.fish)} ${rarity(st.rarity)}</h2>
           ${st.status === 'active' ? '' : '<span class="pill bad">vypnutá</span>'}</div>
-        <div class="muted small">„${esc(st.name)}“ · ${esc(ENV[st.env] || st.env)} · od ${esc(st.author)} ·
+        <div class="muted small">${esc(styleLabel(st))} · „${esc(st.name)}“ · ${esc(ENV[st.env] || st.env)} · od ${esc(st.author)} ·
           pozná se z ${used} ${used === 1 ? 'fotky' : 'fotek'}${st.env === 'tetovani' ? ' (podle kresby)' : ` a ${st.contextCount ?? 0} otisků okolí`}</div>
         <div class="samples">
           <div class="sample original">${st.hasImage ? `<a href="/admin/image/sticker/${st.id}" target="_blank"><img loading="lazy" src="/admin/image/sticker/${st.id}" alt=""></a>` : '<div class="noimg">bez fotky</div>'}
@@ -585,6 +674,8 @@ function bindList() {
     {confirmText: 'Hráč si nastaví nové heslo prvním přihlášením. Pokračovat?', done: 'Heslo resetováno', button: b}));
   app.querySelectorAll('[data-delete-user]').forEach(b => b.onclick = () => act({action: 'delete_user', id: b.dataset.deleteUser},
     {confirmText: 'Smazat prázdný účet?', done: 'Účet smazán', button: b}));
+  app.querySelectorAll('[data-style-of]').forEach(sel => sel.onchange = () =>
+    act({action: 'sticker_style', id: sel.dataset.styleOf, style: sel.value || null}, {done: 'Styl uložen'}));
   app.querySelectorAll('[data-points]').forEach(b => b.onclick = () => openPoints(data.users.find(u => String(u.id) === b.dataset.points)));
 }
 
