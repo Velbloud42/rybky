@@ -53,6 +53,37 @@ def features_of_file(path):
     return hit
 
 
+def colors_of_jpeg(data):
+    """Barvy středu fotky (odstín × sytost × jas) – rozliší stejnou kresbu v jiné barvě nebo na jiném podkladu."""
+    image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    h, w = image.shape[:2]
+    s = int(min(h, w) * CENTER)
+    image = cv2.resize(image[(h - s) // 2:(h - s) // 2 + s, (w - s) // 2:(w - s) // 2 + s], (160, 160))
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1, 2], None, [12, 6, 4], [0, 180, 0, 256, 0, 256])
+    return cv2.normalize(hist, hist).flatten()
+
+
+def colors_of_file(path):
+    key = ("colors", str(path), path.stat().st_mtime)
+    with _lock:
+        hit = _cache.get(key)
+    if hit is None:
+        hit = colors_of_jpeg(path.read_bytes())
+        with _lock:
+            _cache[key] = hit
+    return hit
+
+
+def color_similarity(a, b):
+    """Podobnost barev dvou fotek, 0 až 1."""
+    if a is None or b is None:
+        return 0.0
+    return max(0.0, float(cv2.compareHist(a, b, cv2.HISTCMP_CORREL)))
+
+
 def inliers(a, b):
     """Kolik bodů obou fotek k sobě sedí i geometricky (posun, otočení, zvětšení). 0 = nic společného."""
     if a is None or b is None:

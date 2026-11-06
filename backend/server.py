@@ -469,6 +469,77 @@ def tattoo_scores(conn, jpeg):
     return sorted(scores, key=lambda x: -x[0])
 
 
+# Model rozpoznávání: styl (kresba z indexu) → poloha → barva a okolí jen jako záloha.
+# Styl připadá v úvahu, když se s jeho fotkami shoduje aspoň STYLE_MIN_INLIERS bodů kresby
+# a aspoň STYLE_RATIO z nejlepšího stylu (stejná kresba v jiné barvě má podobně bodů).
+STYLE_MIN_INLIERS = 15
+STYLE_RATIO = 0.5
+# Mezi styly se stejnou kresbou rozhodne barva, jen když je rozdíl zřetelný.
+STYLE_COLOR_GAP = 0.15
+
+
+def style_photos(conn, skip=None):
+    """Fotky každého stylu: originály a nevyřazené úlovky všech jeho rybek. [skip] = fotka, kterou vynechat."""
+    out = {}
+    for r in conn.execute("SELECT id, style_id FROM stickers WHERE style_id IS NOT NULL").fetchall():
+        out.setdefault(r["style_id"], []).extend(f for f in sample_images(conn, r["id"]) if f != skip)
+    return out
+
+
+def style_scores(conn, jpeg, skip=None):
+    """Pro každý styl: (shodné body kresby, podobnost barev) s nejlepší jeho fotkou."""
+    query, colors = match.features_of_jpeg(jpeg), match.colors_of_jpeg(jpeg)
+    scores = {}
+    for style, files in style_photos(conn, skip).items():
+        if files:
+            scores[style] = (max(match.inliers(query, match.features_of_file(IMAGES_DIR / f)) for f in files),
+                             max(match.color_similarity(colors, match.colors_of_file(IMAGES_DIR / f)) for f in files))
+    return scores
+
+
+def plausible_styles(scores):
+    top = max((inl for inl, _ in scores.values()), default=0)
+    return {st for st, (inl, _) in scores.items() if inl >= STYLE_MIN_INLIERS and inl >= top * STYLE_RATIO}
+
+
+def recognize_style(conn, jpeg):
+    """Styl nové rybky z indexu, nebo None (neznámý – zařadí ho admin)."""
+    scores = style_scores(conn, jpeg)
+    styles = plausible_styles(scores)
+    if len(styles) > 1:
+        best = max(scores[st][1] for st in styles)
+        styles = {st for st in styles if scores[st][1] >= best - STYLE_COLOR_GAP}
+    return styles.pop() if len(styles) == 1 else None
+
+
+def identify_fish(conn, jpeg, lat, lon, acc, context, skip=None):
+    """Která rybka je na fotce podle modelu styl → poloha → barva a okolí.
+    Vrací (řádek rybky, None, body kresby), nebo (None, důvod, 0): „no_style“ (žádný styl z indexu),
+    „far“ (styl sedí, ale žádná taková rybka tu není), „ambiguous“ (víc stejných rybek, nerozhodne ani okolí)."""
+    scores = style_scores(conn, jpeg, skip)
+    plausible = plausible_styles(scores)
+    if not plausible:
+        return None, "no_style", 0
+    rows = conn.execute(
+        """SELECT s.*, a.nick AS author FROM stickers s JOIN users a ON a.id = s.author_id
+           WHERE s.status = 'active' AND s.style_id IS NOT NULL""").fetchall()
+    limit = MAX_DISTANCE_M + min(max(acc or 0, 0), 50)
+    candidates = [r for r in rows if r["style_id"] in plausible and (
+        r["env"] in PORTABLE or (lat is not None and r["lat"] is not None and distance_m(lat, lon, r["lat"], r["lon"]) <= limit))]
+    if len({r["style_id"] for r in candidates}) > 1:  # různé styly se stejnou kresbou: barva, je-li zřetelná
+        best = max(scores[r["style_id"]][1] for r in candidates)
+        candidates = [r for r in candidates if scores[r["style_id"]][1] >= best - STYLE_COLOR_GAP]
+    if len(candidates) == 1:
+        return candidates[0], None, scores[candidates[0]["style_id"]][0]
+    if not candidates:
+        return None, "far", 0
+    if context:  # víc rybek, které připadají v úvahu: rozhodne okolí samolepky
+        ranked = sorted(((context_similarity(context, sticker_context(r)), r) for r in candidates), key=lambda x: -x[0])
+        if ranked[0][0] >= CONTEXT_MIN_SIMILARITY and ranked[0][0] - ranked[1][0] >= MATCH_MARGIN:
+            return ranked[0][1], None, scores[ranked[0][1]["style_id"]][0]
+    return None, "ambiguous", 0
+
+
 def recognized_tattoo(scores):
     """Tetování, které kresba jasně určila, nebo None."""
     if not scores or scores[0][0] < TATTOO_MIN_INLIERS:
@@ -1100,7 +1171,11 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         embeddings = [parse_embedding(e) for e in shots]
         if len({len(e) for e in embeddings}) != 1:
             raise ApiError(400, "Neplatný otisk obrázku")
-        if learned_count(self.conn) >= LEARNING_STICKERS and not rybka_check(self.conn, embeddings)[1]:
+        # Styl z indexu (tetování je vždy nový styl). Když ho server pozná, je to určitě rybka z Rybek;
+        # jinak rozhodne galerie vzorů a styl pak přiřadí admin.
+        jpeg = image_bytes(data) if match.available() else None
+        style = recognize_style(self.conn, jpeg) if jpeg and env != TATTOO else None
+        if style is None and learned_count(self.conn) >= LEARNING_STICKERS and not rybka_check(self.conn, embeddings)[1]:
             raise ApiError(422, "Na fotce není rybka z Rybek. Vyfoť ji zblízka.")
         # Stejnou rybku nejde přidat dvakrát: když by ji lov poznal jako už existující, je to duplikát.
         # Stejný motiv na jiném místě (nebo jiném předmětu) projde, protože se liší okolím.
@@ -1136,10 +1211,10 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         now = time.time()
         self.conn.execute(
             """INSERT INTO stickers (id, author_id, name, fish, fish_name, rarity, env, hint, lat, lon, accuracy,
-                                     embeddings, context, image, created, activated)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                     embeddings, context, image, style_id, created, activated)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (sid, u["id"], name, fish, new_fish_name(self.conn), rarity, env, hint, lat, lon, acc,
-             json.dumps([rounded(e) for e in embeddings]), json.dumps([rounded(e) for e in context]), image, now, now),
+             json.dumps([rounded(e) for e in embeddings]), json.dumps([rounded(e) for e in context]), image, style, now, now),
         )
         for e in embeddings:
             add_ref(self.conn, e, "sticker", f"sticker:{sid}")
@@ -1197,10 +1272,28 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         ).fetchone()
         if not row:
             raise ApiError(404, "Takovou samolepku neznám")
-        # Tetování pozná server sám podle kresby na fotce – telefon podle okolí (kůže) netrefí, které to je.
+        # Model: styl rybky (kresba z indexu) → poloha → barva a okolí. Rozhoduje server podle fotky,
+        # telefon jen tipuje. Rybky bez stylu se poznávají postaru, tetování bez stylu podle kresby.
         inliers = None
-        jpeg = image_bytes(data) if row["env"] == TATTOO and match.available() else None
-        if jpeg:
+        jpeg = image_bytes(data) if match.available() else None
+        if jpeg and self.conn.execute("SELECT 1 FROM styles").fetchone():
+            try:
+                plat, plon, pacc = self.coords(data)
+            except ApiError:
+                plat = plon = pacc = None
+            found, why, score = identify_fish(self.conn, jpeg, plat, plon, pacc, None if legacy else crop_context(crops))
+            if found is not None:
+                row, sid, inliers = found, found["id"], score
+            elif why == "far":
+                return {"result": "too_far", "sticker": sticker_json(row),
+                        "message": "Takovou rybku tu nikde nevidím. Jdi blíž k místu, kde visí."}
+            elif why == "ambiguous":
+                return {"result": "no_match", "sticker": sticker_json(row),
+                        "message": "Podobá se to víc rybkám najednou. Ustup, ať je vidět i okolí samolepky."}
+            elif row["style_id"] is not None:
+                return {"result": "no_match", "sticker": sticker_json(row),
+                        "message": "Na fotce nepoznávám žádnou rybku z Rybek. Zaměř ji do čtverce zblízka."}
+        if inliers is None and jpeg and row["env"] == TATTOO:
             scores = tattoo_scores(self.conn, jpeg)
             found = recognized_tattoo(scores)
             if found is None:
@@ -1245,7 +1338,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             "SELECT 1 FROM catches WHERE sticker_id = ? AND finder_id = ? AND accepted = 1", (sid, u["id"])
         ).fetchone()
         unique = similarity - rival >= MATCH_MARGIN
-        if inliers is not None:  # tetování už určila kresba
+        if inliers is not None:  # rybku už určil styl a poloha (nebo kresba tetování)
             fish = unique = True
             similarity = max(similarity, min_similarity)
         accepted = near and fish and similarity >= min_similarity and unique and not already
