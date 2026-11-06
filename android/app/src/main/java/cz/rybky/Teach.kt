@@ -372,7 +372,8 @@ private fun StickerSheet(
             )
             if (!recognized) Text(
                 "Na fotce nevidím rybku z Rybek" + (shot.rybka?.let { " (shoda ${(it.first * 100).toInt()} %)" } ?: "") +
-                    if (onEdit != null) ". Přibliž ji ve výřezu." else ". Vyfoť ji zblízka.",
+                    (if (onEdit != null) ". Přibliž ji ve výřezu" else ". Vyfoť ji zblízka") +
+                    " – nebo to zkus nalepit, rozhodne server.",
                 color = MaterialTheme.colorScheme.error,
             )
             if (onEdit != null) Row(verticalAlignment = Alignment.CenterVertically) {
@@ -461,7 +462,7 @@ private fun StickerSheet(
                             busy = false
                         }
                     },
-                    enabled = !busy && recognized && form.name.trim().length >= 2 && form.env != null &&
+                    enabled = !busy && form.name.trim().length >= 2 && form.env != null &&
                         (portable || !shot.fromGallery || manualFix != null),
                     modifier = Modifier.weight(2f).height(52.dp),
                 ) {

@@ -70,6 +70,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -100,6 +101,12 @@ const val MATCH_MARGIN = 0.1f
 
 /** Kolik snímků po sobě musí sedět, než se pošle úlovek (aby nestačil jeden náhodný snímek). */
 const val MATCH_STREAK = 3
+
+/** Po neúspěšném pokusu (jiná rybka, nesedí kresba…) se další pošle nejdřív za tolik ms. */
+const val RETRY_PAUSE_MS = 2500L
+
+/** Tetování: stačí, že snímek trochu připomíná nějaké tetování – které to je, pozná server podle kresby. */
+const val TATTOO_MIN_SIMILARITY = 0.45f
 
 /** Pozadí ikony aplikace. */
 private val FishGreen = Color(0xFF18450B)
@@ -301,6 +308,7 @@ fun MainScreen(api: Api, onLogout: () -> Unit) {
             }
         }
     }
+    UpdatePrompt(api)
 }
 
 // --- registrace a přihlášení ---------------------------------------------
@@ -396,6 +404,9 @@ fun HuntScreen(api: Api, embedder: Embedder) {
     var streak by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<JSONObject?>(null) }
+    // Odpověď serveru, která lov nezastaví (jiná rybka, nesedí, už ulovená) – ukáže se a loví se dál.
+    var hint by remember { mutableStateOf<String?>(null) }
+    var pauseUntil by remember { mutableLongStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     val snapshot = remember { CameraSnapshot() }
@@ -437,11 +448,14 @@ fun HuntScreen(api: Api, embedder: Embedder) {
             bestMatch = best?.first
             clear = best == null || best.second - (scored.getOrNull(1)?.second ?: -1f) >= best.first.margin
             fishSeen = rybka.recognizes(rybka?.check(crops))
-            val passes = best != null && best.second >= best.first.minSimilarity && clear && fishSeen
-            // Vlastní nebo už ulovenou rybku jen ukáže, na server ji neposílá.
-            streak = if (passes && best!!.first.catchable) streak + 1 else 0
+            // Tetování jsou všechna na kůži, takže které to je, telefon podle okolí nepozná – pošle fotku
+            // a rozhodne server podle kresby (i o tom, jestli je vlastní nebo už ulovené).
+            val tattoo = best?.first?.kind == TATTOO
+            val send = best != null && fishSeen && if (tattoo) best.second >= TATTOO_MIN_SIMILARITY
+                else best.second >= best.first.minSimilarity && clear && best.first.catchable
+            streak = if (send) streak + 1 else 0
             val f = fix
-            if (best != null && f != null && streak >= MATCH_STREAK) {
+            if (best != null && f != null && streak >= MATCH_STREAK && System.currentTimeMillis() >= pauseUntil) {
                 busy = true
                 streak = 0
                 scope.launch {
@@ -449,14 +463,20 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                         val photo = snapshot.take()?.let { withContext(Dispatchers.Default) { it.jpegBase64() } }
                         api.scan(best.first.id, f, crops, photo)
                     }
-                        .onSuccess { result = it }
+                        .onSuccess {
+                            if (it.optString("result") == "caught") {
+                                result = it; hint = null
+                            } else {
+                                hint = it.optString("message"); pauseUntil = System.currentTimeMillis() + RETRY_PAUSE_MS
+                            }
+                        }
                         .onFailure { error = it.message }
                     busy = false
                 }
             }
         }
         val similar = bestMatch?.let { similarity >= it.minSimilarity } == true
-        AimSquare(if (similar && clear && fishSeen) Amber else Color.White)
+        AimSquare(if (similar && (clear || bestMatch?.kind == TATTOO) && fishSeen) Amber else Color.White)
 
         Column(Modifier.align(Alignment.BottomCenter).padding(16.dp).fillMaxWidth()) {
             val res = result
@@ -485,8 +505,14 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                     )
                     Spacer(Modifier.height(8.dp))
                     val match = bestMatch
+                    val tattoo = match?.kind == TATTOO
                     when {
-                        match == null || !similar -> {}
+                        busy -> Text(
+                            if (tattoo) "Porovnávám kresbu tetování…" else "Ověřuju úlovek…",
+                            fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
+                        )
+                        hint != null -> Text(hint!!, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        match == null || tattoo || !similar -> {}
                         !clear -> Text(
                             "Podobá se víc rybkám najednou – ustup, ať je vidět i okolí samolepky.",
                             fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
@@ -501,7 +527,9 @@ fun HuntScreen(api: Api, embedder: Embedder) {
                             fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary,
                         )
                     }
-                    match?.let { Text("Nejpodobnější: ${it.label}", fontSize = 13.sp) }
+                    match?.let {
+                        Text(if (tattoo) "Vidím tetování – které to je, pozná se podle kresby" else "Nejpodobnější: ${it.label}", fontSize = 13.sp)
+                    }
                     SimilarityBar(similarity, bestMatch?.minSimilarity ?: MIN_SIMILARITY)
                 }
             }

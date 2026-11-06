@@ -28,6 +28,9 @@ class Api(var token: String?) {
 
     suspend fun leaderboard(): JSONObject = call("GET", "/api/leaderboard") as JSONObject
 
+    /** Nejnovější vydaná verze (stejné vydání na GitHubu, jaké nabízí rybky.pravn.uk/download). */
+    suspend fun version(): JSONObject = call("GET", "/api/version") as JSONObject
+
     suspend fun environments(): JSONArray = call("GET", "/api/environments") as JSONArray
 
     suspend fun fish(): JSONArray = call("GET", "/api/fish") as JSONArray

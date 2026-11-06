@@ -62,7 +62,6 @@ import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
-import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import java.io.File
@@ -83,10 +82,7 @@ private val MAPY_TILES = object : OnlineTileSourceBase(
             "?apikey=${BuildConfig.MAPY_API_KEY}"
 }
 
-/**
- * Mapa samolepek z celého světa. Každá má špendlík (vidět při jakémkoli přiblížení) a kruh, ve kterém
- * je schovaná – server posílá jen posunutý střed kruhu, ne přesné místo.
- */
+/** Mapa samolepek z celého světa: špendlík na přesném místě, kde samolepka visí. */
 @Composable
 fun MapScreen(api: Api) {
     val context = LocalContext.current
@@ -108,8 +104,21 @@ fun MapScreen(api: Api) {
             setMultiTouchControls(true)
             isTilesScaledToDpi = true
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-            minZoomLevel = 2.0
             maxZoomLevel = 19.0
+            // Jen jeden svět: neopakuje se do stran ani nahoru a dolů a dál než za jeho okraj posunout nejde.
+            isHorizontalMapRepetitionEnabled = false
+            isVerticalMapRepetitionEnabled = false
+            setScrollableAreaLimitLatitude(MapView.getTileSystem().maxLatitude, MapView.getTileSystem().minLatitude, 0)
+            setScrollableAreaLimitLongitude(MapView.getTileSystem().minLongitude, MapView.getTileSystem().maxLongitude, 0)
+            // Nejmenší přiblížení: svět vyplní celou obrazovku (víc oddálit by ukázalo prázdno kolem).
+            addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                val world = TileSystem.getTileSize() * context.resources.displayMetrics.density
+                val min = log2(maxOf(view.width, view.height) / world.toDouble()).coerceAtLeast(0.0)
+                if (min != minZoomLevel) {
+                    minZoomLevel = min
+                    if (zoomLevelDouble < min) controller.setZoom(min)
+                }
+            }
             // Než se zjistí poloha, ukazuje celou ČR.
             controller.setZoom(7.5)
             controller.setCenter(GeoPoint(49.8, 15.5))
@@ -159,13 +168,6 @@ fun MapScreen(api: Api) {
                 else -> Amber
             }
             val center = GeoPoint(s.getDouble("lat"), s.getDouble("lon"))
-            stickerOverlays += Polygon(mapView).apply {
-                points = Polygon.pointsAsCircle(center, s.getDouble("radius"))
-                fillPaint.color = color.copy(alpha = 0.22f).toArgb()
-                outlinePaint.color = color.toArgb()
-                outlinePaint.strokeWidth = 5f
-                setOnClickListener { _, _, _ -> selected = s; true }
-            }
             stickerOverlays += Marker(mapView).apply {
                 position = center
                 icon = BitmapDrawable(context.resources, stickerPin(context, color.toArgb()))
@@ -279,7 +281,7 @@ private fun StickerCard(s: JSONObject, onClose: () -> Unit) {
             }
             IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Zavřít") }
         }
-        Text("~${formatDistance(s.getInt("distance"))} na ${compass(s.getInt("bearing"))} · nalepil(a) ${s.getString("author")}")
+        Text("${formatDistance(s.getInt("distance"))} na ${compass(s.getInt("bearing"))} · nalepil(a) ${s.getString("author")}")
         if (!s.isNull("hint")) Text("„${s.getString("hint")}“", modifier = Modifier.padding(top = 4.dp))
         val finders = s.optJSONArray("finders")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
         Text(
@@ -290,7 +292,7 @@ private fun StickerCard(s: JSONObject, onClose: () -> Unit) {
         when {
             s.getBoolean("own") -> Text("Tvoje samolepka", color = MaterialTheme.colorScheme.primary)
             s.getBoolean("caught") -> Text("Už ji máš v akváriu", color = MaterialTheme.colorScheme.primary)
-            else -> Text("Samolepka je někde v kruhu", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            else -> Text("Visí přesně u špendlíku – jdi tam a ulov ji", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -317,7 +319,7 @@ private fun zoomToAll(mapView: MapView, items: List<JSONObject>, fix: Fix?) {
     // 70 % šířky a 55 % výšky – zbytek zabírají tlačítka a panel dole.
     val zoomX = log2(mapView.width * 0.7 / (tile * (east - west).coerceAtLeast(1e-9)))
     val zoomY = log2(mapView.height * 0.55 / (tile * (south - north).coerceAtLeast(1e-9)))
-    val zoom = minOf(zoomX, zoomY).coerceIn(2.0, 16.0)
+    val zoom = minOf(zoomX, zoomY).coerceIn(mapView.minZoomLevel, 16.0)
     val centerY = (north + south) / 2
     val center = GeoPoint(Math.toDegrees(atan(sinh(PI * (1 - 2 * centerY)))), (west + east) / 2 * 360 - 180)
     jumpTo(mapView, center, zoom)

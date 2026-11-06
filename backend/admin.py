@@ -321,17 +321,26 @@ class AdminMixin:
             "adjustments": q("""SELECT p.id, p.delta, p.reason, p.time, u.nick FROM point_adjustments p
                                 JOIN users u ON u.id = p.user_id ORDER BY p.time DESC LIMIT 200"""),
             "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created,
+                                    json_array_length(s.context) AS contextCount,
                                     s.image IS NOT NULL AS hasImage, a.nick AS author,
                                     (SELECT COUNT(*) FROM catches c WHERE c.sticker_id = s.id AND c.accepted = 1) AS finds,
                                     (SELECT GROUP_CONCAT(u.nick, ', ') FROM catches c JOIN users u ON u.id = c.finder_id
                                      WHERE c.sticker_id = s.id AND c.accepted = 1) AS finders
                              FROM stickers s JOIN users a ON a.id = s.author_id ORDER BY s.created DESC"""),
-            "catches": q("""SELECT c.id, c.time, c.accepted, c.similarity, c.distance, c.points,
+            "catches": q("""SELECT c.id, c.time, c.accepted, c.similarity, c.inliers, c.excluded, c.distance, c.points,
                                    c.image IS NOT NULL AS hasImage, u.nick AS finder, s.id AS stickerId, s.name AS sticker,
                                    s.env, s.fish, s.fish_name, s.rarity,
                                    EXISTS(SELECT 1 FROM refs r WHERE r.origin = 'catch:' || c.id AND r.negative = 1) AS negative
                             FROM catches c JOIN users u ON u.id = c.finder_id JOIN stickers s ON s.id = c.sticker_id
                             ORDER BY c.time DESC LIMIT 200"""),
+            # Databáze vzorů: z jakých fotek se která rybka pozná, a co je označené „není rybka“.
+            "samples": q("""SELECT c.id, c.sticker_id AS stickerId, c.time, c.similarity, c.inliers, c.excluded,
+                                   c.image IS NOT NULL AS hasImage, u.nick AS finder
+                            FROM catches c JOIN users u ON u.id = c.finder_id
+                            WHERE c.accepted = 1 ORDER BY c.time"""),
+            "negatives": q("""SELECT r.origin, MIN(r.created) AS created FROM refs r
+                              WHERE r.negative = 1 AND r.origin IS NOT NULL GROUP BY r.origin ORDER BY created DESC"""),
+            "refCounts": q("SELECT source, negative, COUNT(*) AS n FROM refs GROUP BY source, negative"),
             "keys": q("SELECT id, name, created FROM admin_keys ORDER BY created"),
         }
 
@@ -409,14 +418,25 @@ class AdminMixin:
             conn.execute("UPDATE refs SET negative = 1 WHERE origin = ?", (f"sticker:{ident}",))
         elif action == "catch_not_rybka":
             self._revoke_catch(int(ident))
+        elif action == "ref_positive":
+            # Fotka označená „není rybka“ přece rybka je – vrátit její otisky mezi vzory rybky.
+            conn.execute("UPDATE refs SET negative = 0 WHERE origin = ?", (str(ident),))
+        elif action == "catch_wrong_fish":
+            self._revoke_catch(int(ident), negative=False)
+        elif action in ("sample_exclude", "sample_include"):
+            c = conn.execute("SELECT * FROM catches WHERE id = ? AND accepted = 1", (int(ident),)).fetchone()
+            if not c:
+                raise AdminError(404, "Takový úlovek není")
+            self._set_sample(c, action == "sample_include")
         elif action == "sticker_delete":
             self._delete_sticker(ident)
         else:
             raise AdminError(400, "Neznámá akce")
         return {"ok": True}
 
-    def _revoke_catch(self, catch_id):
-        """Úlovek nebyl rybka: vzít body, otisk dát mezi negativní a odebrat ho ze samolepky."""
+    def _revoke_catch(self, catch_id, negative=True):
+        """Úlovek neplatí: vzít body a odebrat jeho fotku ze vzorů samolepky. Když na fotce nebyla rybka
+        vůbec ([negative]), otisk jde navíc mezi vzory „není rybka“; když to byla jen jiná rybka, ne."""
         conn = self.conn
         c = conn.execute(
             """SELECT c.*, s.env, s.rarity, s.author_id, s.embeddings FROM catches c
@@ -435,14 +455,22 @@ class AdminMixin:
             shots = [e for e in json.loads(c["embeddings"]) if e != json.loads(ref["embedding"])]
             if shots:
                 conn.execute("UPDATE stickers SET embeddings = ? WHERE id = ?", (json.dumps(shots), c["sticker_id"]))
-            conn.execute("UPDATE refs SET negative = 1 WHERE origin = ?", (f"catch:{catch_id}",))
-        # I okolí, které úlovek samolepce přidal, už k ní nepatří.
+            if negative:
+                conn.execute("UPDATE refs SET negative = 1 WHERE origin = ?", (f"catch:{catch_id}",))
+        self._set_sample(c, False)
+
+    def _set_sample(self, c, use):
+        """Zařadí fotku úlovku [c] mezi vzory jeho rybky, nebo ji z nich vyřadí (i s okolím, které přidala)."""
+        conn = self.conn
+        conn.execute("UPDATE catches SET excluded = ? WHERE id = ?", (int(not use), c["id"]))
         added = json.loads(c["context"] or "[]")
         sticker = conn.execute("SELECT context FROM stickers WHERE id = ?", (c["sticker_id"],)).fetchone()
-        if added and sticker["context"]:
-            kept = [e for e in json.loads(sticker["context"]) if e not in added]
-            if kept:
-                conn.execute("UPDATE stickers SET context = ? WHERE id = ?", (json.dumps(kept), c["sticker_id"]))
+        if not added or not sticker["context"]:
+            return
+        current = json.loads(sticker["context"])
+        kept = [e for e in current if e not in added] + (added if use else [])
+        if kept:
+            conn.execute("UPDATE stickers SET context = ? WHERE id = ?", (json.dumps(kept), c["sticker_id"]))
 
     def _delete_sticker(self, sticker_id):
         """Smaže rybku úplně: lovci i autor přijdou o body za její úlovky, zmizí úlovky, fotky

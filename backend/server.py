@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import admin
+import match
 
 DB_PATH = Path(os.environ.get("RYBKY_DB") or Path(__file__).with_name("rybky.db"))
 # Fotky samolepek a úlovků (JPEG) vedle databáze.
@@ -42,8 +43,6 @@ MAX_IMAGE = 1_500_000
 
 # Nález se uzná do této vzdálenosti od místa aktivace (+ nepřesnost GPS nálezce, max. 50 m).
 MAX_DISTANCE_M = 50
-# Na mapě se ukazuje jen kruh, ve kterém samolepka je.
-MAP_CIRCLE_M = 120
 # Do této vzdálenosti dostane telefon otisky samolepek, aby je mohl rozpoznávat v kameře.
 NEARBY_M = 300
 # Minimální kosinová podobnost fotky nálezce s naučenými fotkami samolepky.
@@ -65,6 +64,10 @@ CONTEXT_CROPS = slice(1, 3)
 CONTEXT_MIN_SIMILARITY = 0.55
 # Ulovit (a nalepit) jde jen rybku, která je jasně podobnější než všechny ostatní v dosahu.
 MATCH_MARGIN = 0.1
+# Tetování jsou všechna na kůži, takže je nerozliší okolí, ale kresba (match.py): tetování se pozná,
+# když se s jeho fotkami shoduje aspoň TATTOO_MIN_INLIERS bodů a aspoň TATTOO_RATIO× víc než s druhým.
+TATTOO_MIN_INLIERS = 15
+TATTOO_RATIO = 2
 
 RARITY_WEIGHT = {"běžná": 60, "nevšední": 25, "vzácná": 12, "legendární": 3}
 RARITY_POINTS = {"běžná": 10, "nevšední": 20, "vzácná": 40, "legendární": 100}
@@ -242,6 +245,9 @@ def init_db():
         add_column(conn, "stickers", "fish_name", "TEXT")
         add_column(conn, "stickers", "context", "TEXT")  # JSON: otisky okolí (originál + úlovky)
         add_column(conn, "catches", "context", "TEXT")   # co úlovek přidal do okolí samolepky (kvůli odebrání)
+        add_column(conn, "catches", "inliers", "INTEGER")  # u tetování: kolik bodů kresby sedělo
+        # Admin může fotku úlovku vyřadit ze vzorů rybky (třeba když to byla jiná rybka).
+        add_column(conn, "catches", "excluded", "INTEGER NOT NULL DEFAULT 0")
         add_column(conn, "users", "avatar", "TEXT")
         add_column(conn, "users", "motto", "TEXT")
         add_column(conn, "users", "showcase", "TEXT")  # JSON seznam vybraných odznaků, NULL = poslední tři
@@ -354,16 +360,6 @@ def distance_m(lat1, lon1, lat2, lon2):
     return 2 * r * math.asin(math.sqrt(a))
 
 
-def fuzzed_center(sticker_id, lat, lon):
-    """Střed kruhu na mapě: posunutý od samolepky, ale vždy stejně, aby nešel zprůměrovat."""
-    h = hashlib.sha256(sticker_id.encode()).digest()
-    angle = h[0] / 255 * 2 * math.pi
-    dist = (0.3 + 0.5 * h[1] / 255) * MAP_CIRCLE_M
-    dlat = dist * math.cos(angle) / 111320
-    dlon = dist * math.sin(angle) / (111320 * math.cos(math.radians(lat)))
-    return lat + dlat, lon + dlon
-
-
 def cosine(a, b):
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
@@ -424,6 +420,38 @@ def reachable(conn, lat, lon, acc, exclude=None):
         if r["id"] != exclude and (lat is None or r["env"] in PORTABLE or (
             r["lat"] is not None and distance_m(lat, lon, r["lat"], r["lon"]) <= limit))
     ]
+
+
+def sample_images(conn, sticker_id):
+    """Fotky, podle kterých se rybka pozná: originál a úlovky, které admin nevyřadil."""
+    original = conn.execute("SELECT image FROM stickers WHERE id = ?", (sticker_id,)).fetchone()
+    catches = conn.execute(
+        "SELECT image FROM catches WHERE sticker_id = ? AND accepted = 1 AND excluded = 0 AND image IS NOT NULL",
+        (sticker_id,),
+    ).fetchall()
+    return [name for name in [original["image"] if original else None, *(c["image"] for c in catches)]
+            if name and (IMAGES_DIR / name).exists()]
+
+
+def tattoo_scores(conn, jpeg):
+    """Kolik bodů kresby se shoduje s každým aktivním tetováním (nejlepší fotka), od nejlepšího."""
+    query = match.features_of_jpeg(jpeg)
+    rows = conn.execute(
+        """SELECT s.*, a.nick AS author FROM stickers s JOIN users a ON a.id = s.author_id
+           WHERE s.status = 'active' AND s.env = ?""",
+        (TATTOO,),
+    ).fetchall()
+    scores = [(max((match.inliers(query, match.features_of_file(IMAGES_DIR / name))
+                    for name in sample_images(conn, r["id"])), default=0), r) for r in rows]
+    return sorted(scores, key=lambda x: -x[0])
+
+
+def recognized_tattoo(scores):
+    """Tetování, které kresba jasně určila, nebo None."""
+    if not scores or scores[0][0] < TATTOO_MIN_INLIERS:
+        return None
+    second = scores[1][0] if len(scores) > 1 else 0
+    return scores[0][1] if scores[0][0] >= TATTOO_RATIO * second else None
 
 
 def catch_points(env, rarity):
@@ -595,8 +623,8 @@ def rounded(embedding):
     return [round(x, 4) for x in embedding]
 
 
-def save_image(data, name, key="image"):
-    """Uloží JPEG poslaný jako base64; vrátí jméno souboru, nebo None, když žádný nepřišel."""
+def image_bytes(data, key="image"):
+    """JPEG poslaný jako base64, nebo None, když žádný nepřišel."""
     raw = data.get(key)
     if not raw:
         return None
@@ -606,6 +634,14 @@ def save_image(data, name, key="image"):
         raise ApiError(400, "Neplatný obrázek")
     if not jpeg.startswith(b"\xff\xd8\xff") or len(jpeg) > MAX_IMAGE:
         raise ApiError(400, "Neplatný obrázek")
+    return jpeg
+
+
+def save_image(data, name, key="image"):
+    """Uloží JPEG poslaný jako base64; vrátí jméno souboru, nebo None, když žádný nepřišel."""
+    jpeg = image_bytes(data, key)
+    if jpeg is None:
+        return None
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     (IMAGES_DIR / f"{name}.jpg").write_bytes(jpeg)
     return f"{name}.jpg"
@@ -728,6 +764,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             ("GET", r"/intro/?$", self.intro),
             ("GET", r"/intro/(icon|ryba)\.png$", self.intro_image),
             ("GET", r"/download/?$", self.download),
+            ("GET", r"/api/version$", self.version),
             ("POST", r"/api/register$", self.register),
             ("POST", r"/api/login$", self.login),
             ("POST", r"/api/password$", self.set_password),
@@ -814,6 +851,15 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         """Vždy nejnovější APK – odkaz rybky.pravn.uk/download jde sdílet i dát do QR kódu."""
         release = latest_release()
         return redirect(release["url"] if release else RELEASES_URL + "/latest")
+
+    def version(self):
+        """Nejnovější verze aplikace pro aktualizaci přímo v telefonu (APK ze stejného vydání na GitHubu)."""
+        release = latest_release()
+        if not release:
+            raise ApiError(503, "Nejnovější verzi teď nejde zjistit")
+        plain = lambda t: re.sub(r"\*\*|`", "", re.sub(r"\[(.+?)\]\(\S+?\)", r"\1", t))  # noqa: E731
+        return {"version": release["version"], "url": release["url"], "size": release["size"],
+                "notes": [plain(line[2:].strip()) for line in release["notes"].splitlines() if line.startswith(("- ", "* "))]}
 
     def intro_image(self, name):
         return Raw("image/png", (WEB_DIR / f"{name}.png").read_bytes(), {"Cache-Control": "public, max-age=86400"})
@@ -1036,7 +1082,19 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         # Stejnou rybku nejde přidat dvakrát: když by ji lov poznal jako už existující, je to duplikát.
         # Stejný motiv na jiném místě (nebo jiném předmětu) projde, protože se liší okolím.
         context = crop_context(embeddings)
+        tattoo_check = env == TATTOO and match.available()
+        if tattoo_check:
+            jpeg = image_bytes(data)
+            if jpeg is None:
+                raise ApiError(400, "Tetování nejdřív vyfoť")
+            scores = tattoo_scores(self.conn, jpeg)
+            if scores and scores[0][0] >= TATTOO_MIN_INLIERS:
+                r = scores[0][1]
+                raise ApiError(409, f"Tohle tetování už ve hře je – nosí ho {r['name']}, přidal(a) {r['author']}. "
+                                    "Stejnou rybku dvakrát přidat nejde.")
         for r in reachable(self.conn, lat, lon, acc):
+            if tattoo_check or r["env"] == TATTOO:  # tetování od ostatního rozliší už to, co je na fotce
+                continue
             if context_similarity(context, sticker_context(r)) >= CONTEXT_MIN_SIMILARITY:
                 what = {TATTOO: "Tohle tetování", OBJECT: "Tenhle předmět"}.get(r["env"], "Tahle samolepka")
                 raise ApiError(409, f"{what} už ve hře je – „{r['name']}“, přidal(a) {r['author']}. "
@@ -1116,8 +1174,19 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         ).fetchone()
         if not row:
             raise ApiError(404, "Takovou samolepku neznám")
+        # Tetování pozná server sám podle kresby na fotce – telefon podle okolí (kůže) netrefí, které to je.
+        inliers = None
+        jpeg = image_bytes(data) if row["env"] == TATTOO and match.available() else None
+        if jpeg:
+            scores = tattoo_scores(self.conn, jpeg)
+            found = recognized_tattoo(scores)
+            if found is None:
+                return {"result": "no_match", "sticker": sticker_json(row),
+                        "message": "Tohle tetování nepoznávám. Vyfoť ho zblízka a ostře, ať je vidět celá kresba."}
+            row, sid, inliers = found, found["id"], scores[0][0]
         if row["author_id"] == u["id"]:
-            return {"result": "own", "sticker": sticker_json(row), "message": "Tohle je tvoje samolepka."}
+            return {"result": "own", "sticker": sticker_json(row),
+                    "message": "Tohle je tvoje tetování." if row["env"] == TATTOO else "Tohle je tvoje samolepka."}
         if row["status"] != "active":
             raise ApiError(409, "Tahle samolepka už tu není")
         portable = row["env"] in PORTABLE
@@ -1153,15 +1222,19 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             "SELECT 1 FROM catches WHERE sticker_id = ? AND finder_id = ? AND accepted = 1", (sid, u["id"])
         ).fetchone()
         unique = similarity - rival >= MATCH_MARGIN
+        if inliers is not None:  # tetování už určila kresba
+            fish = unique = True
+            similarity = max(similarity, min_similarity)
         accepted = near and fish and similarity >= min_similarity and unique and not already
         self.before_stats = user_stats(self.conn, u["id"]) if accepted else None
         points = catch_points(row["env"], row["rarity"]) if accepted else 0
         catch_id = self.conn.execute(
-            """INSERT INTO catches (sticker_id, finder_id, lat, lon, accuracy, distance, similarity, accepted, points, time)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (sid, u["id"], lat, lon, acc, dist, round(similarity, 4), int(accepted), points, time.time()),
+            """INSERT INTO catches (sticker_id, finder_id, lat, lon, accuracy, distance, similarity, inliers, accepted,
+                                   points, time)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (sid, u["id"], lat, lon, acc, dist, None if inliers is not None else round(similarity, 4), inliers,
+             int(accepted), points, time.time()),
         ).lastrowid
-        # Přesnou vzdálenost nevracíme – šlo by z ní dopočítat polohu samolepky.
         base = {"sticker": sticker_json(row), "author": row["author"]}
         if already:
             return {**base, "result": "already", "message": "Tuhle rybu už máš v akváriu."}
@@ -1221,7 +1294,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         return Raw("image/jpeg", (IMAGES_DIR / row["image"]).read_bytes(), {"Cache-Control": "private, max-age=86400"})
 
     def map(self):
-        """Všechny samolepky na světě (kruhy s posunutým středem). Volitelně jen do `radius` metrů."""
+        """Všechny samolepky na světě s přesnou polohou. Volitelně jen do `radius` metrů."""
         u = self.user()
         try:
             lat, lon = float(self.query["lat"]), float(self.query["lon"])
@@ -1241,7 +1314,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         finders = finders_by_sticker(self.conn)
         out = []
         for r in rows:
-            clat, clon = fuzzed_center(r["id"], r["lat"], r["lon"])
+            clat, clon = r["lat"], r["lon"]
             d = distance_m(lat, lon, clat, clon)
             if d > radius:
                 continue
@@ -1249,7 +1322,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             known = bool(r["caught"]) or own
             out.append({
                 "id": r["id"],
-                "lat": clat, "lon": clon, "radius": MAP_CIRCLE_M,
+                "lat": clat, "lon": clon, "radius": 0,
                 "distance": round(d),
                 "bearing": round(math.degrees(math.atan2(
                     math.sin(math.radians(clon - lon)) * math.cos(math.radians(clat)),
