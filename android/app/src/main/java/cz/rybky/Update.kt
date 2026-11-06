@@ -102,11 +102,9 @@ private fun install(context: Context, apk: File): Boolean {
 /**
  * Po spuštění se zeptá serveru na nejnovější verzi (stejné vydání na GitHubu jako na rybky.pravn.uk)
  * a když je novější, nabídne ji stáhnout a nainstalovat přímo v aplikaci.
- * Vývojová verze se neaktualizuje – je podepsaná jiným klíčem, takže by vydání z GitHubu nešlo nainstalovat.
  */
 @Composable
 fun UpdatePrompt(api: Api) {
-    if (BuildConfig.DEBUG) return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var info by remember { mutableStateOf<JSONObject?>(null) }

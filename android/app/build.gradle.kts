@@ -41,6 +41,13 @@ android {
     }
 
     buildTypes {
+        // Vývojová verze má stejný podpis jako vydání z GitHubu, takže se dají instalovat přes sebe
+        // (a funguje i aktualizace přímo v aplikaci). Bez klíče v local.properties zůstane ladicí podpis.
+        debug {
+            if (localProperties.getProperty("release.storeFile") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
         release {
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
