@@ -73,8 +73,8 @@ RARITY_WEIGHT = {"běžná": 60, "nevšední": 25, "vzácná": 12, "legendární
 RARITY_POINTS = {"běžná": 10, "nevšední": 20, "vzácná": 40, "legendární": 100}
 RARITIES = list(RARITY_POINTS)
 AUTHOR_POINTS = 5
-# Kdo nalepí vzácnější rybku, dostane body hned: od nevšední +20 za každý stupeň (předměty nic).
-STICK_POINTS = {"běžná": 0, "nevšední": 20, "vzácná": 40, "legendární": 60}
+# Kdo nalepí vzácnou nebo legendární rybku, dostane body hned (předměty nic).
+STICK_POINTS = {"běžná": 0, "nevšední": 0, "vzácná": 40, "legendární": 60}
 # Rybka na hrnku nebo tričku je drobnost: za úlovek jen půl bodu, autor nedostane nic.
 OBJECT_POINTS = 0.5
 
