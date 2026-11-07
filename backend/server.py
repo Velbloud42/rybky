@@ -827,6 +827,10 @@ def latest_release():
         if e.code != 304:  # 304 = beze změny
             print(f"GitHub: nejnovější verzi nejde zjistit: {e!r}", flush=True)
             wait = 60
+            # Vyčerpaný limit dotazů (60 za hodinu): zkoušet to dřív, než se obnoví, by ho jen dál vyčerpávalo.
+            reset = e.headers.get("X-RateLimit-Reset") if e.headers else None
+            if e.code in (403, 429) and reset and reset.isdigit():
+                wait = max(60, int(reset) - time.time() + 5)
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"GitHub: nejnovější verzi nejde zjistit: {e!r}", flush=True)
         wait = 60
