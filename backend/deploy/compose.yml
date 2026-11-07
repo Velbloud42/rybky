@@ -11,6 +11,8 @@ services:
       - RYBKY_DB=/data/rybky.db
       - ADMIN_RP_ID=rybky.pravn.uk
       - ADMIN_ORIGIN=https://rybky.pravn.uk
+      # Klíč k Mapy.com pro mapku v adminu – jen v souboru .env vedle compose.yml, ne v repu.
+      - MAPY_API_KEY=${MAPY_API_KEY:-}
     ports:
       - "8090:8000"
     volumes:

@@ -206,10 +206,10 @@ class AdminMixin:
             "Cache-Control": "no-store",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer",
-            # Leaflet (mapka v detailu rybky) z cdnjs, podklad z OpenStreetMap.
+            # Leaflet (mapka v detailu rybky) z cdnjs, podklad z Mapy.com.
             "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
                                        "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
-                                       "img-src 'self' data: https://tile.openstreetmap.org https://cdnjs.cloudflare.com; "
+                                       "img-src 'self' data: https://api.mapy.com https://cdnjs.cloudflare.com; "
                                        "frame-ancestors 'none'",
         })
 
@@ -381,6 +381,7 @@ class AdminMixin:
                               WHERE r.negative = 1 AND r.origin IS NOT NULL GROUP BY r.origin ORDER BY created DESC"""),
             "refCounts": q("SELECT source, negative, COUNT(*) AS n FROM refs GROUP BY source, negative"),
             "keys": q("SELECT id, name, created FROM admin_keys ORDER BY created"),
+            "mapyKey": os.environ.get("MAPY_API_KEY", ""),
         }
 
     def _admin_image(self, kind, ident):

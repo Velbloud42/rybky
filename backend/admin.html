@@ -529,15 +529,21 @@ function drawFish() {
     </div>`;
   document.getElementById('fishClose').onclick = () => fishDlg.close();
   bindActions(fishDlg);
-  if (st.lat != null && window.L) placeOnMap(st);
+  if (st.lat != null && window.L && data.mapyKey) placeOnMap(st);
 }
 
 /** Mapka v detailu: špendlík jde přetáhnout nebo přesunout kliknutím; souřadnice se propíšou do pole. */
 function placeOnMap(st) {
   const input = fishDlg.querySelector(`[data-coords="${st.id}"]`);
   const map = L.map('fishMap').setView([st.lat, st.lon], 18);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    {maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+  // Turistická mapa z Mapy.com (stejná jako v aplikaci), ve 2× rozlišení kvůli ostrosti.
+  L.tileLayer(`https://api.mapy.com/v1/maptiles/outdoor/256@2x/{z}/{x}/{y}?apikey=${encodeURIComponent(data.mapyKey)}`,
+    {maxZoom: 19, attribution: '<a href="https://mapy.com/" target="_blank" rel="noopener">© Seznam.cz a.s. a další</a>'}).addTo(map);
+  // Mapy.com vyžadují viditelné logo.
+  const logo = L.control({position: 'bottomleft'});
+  logo.onAdd = () => Object.assign(L.DomUtil.create('a'), {href: 'https://mapy.com/', target: '_blank',
+    innerHTML: '<img src="https://api.mapy.com/img/api/logo.svg" alt="Mapy.com" style="height:20px;display:block">'});
+  logo.addTo(map);
   const pin = L.marker([st.lat, st.lon], {draggable: true}).addTo(map);
   const show = p => { input.value = `${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}`; };
   pin.on('dragend', () => show(pin.getLatLng()));
