@@ -206,8 +206,11 @@ class AdminMixin:
             "Cache-Control": "no-store",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; "
-                                       "style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
+            # Leaflet (mapka v detailu rybky) z cdnjs, podklad z OpenStreetMap.
+            "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+                                       "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+                                       "img-src 'self' data: https://tile.openstreetmap.org https://cdnjs.cloudflare.com; "
+                                       "frame-ancestors 'none'",
         })
 
     def _admin_state(self):
@@ -460,7 +463,8 @@ class AdminMixin:
                 raise AdminError(409, f"Jméno „{name}“ už má jiná rybka")
             conn.execute("UPDATE stickers SET fish_name = ? WHERE id = ?", (name, ident))
         elif action == "sticker_not_rybka":
-            # Vypnout samolepku a její fotky přesunout mezi negativní vzory.
+            # Vypnout samolepku a její fotky přesunout mezi negativní vzory; body za nalepení zpět.
+            self._revoke_stick_points(ident)
             conn.execute("UPDATE stickers SET status = 'lost' WHERE id = ?", (ident,))
             conn.execute("UPDATE refs SET negative = 1 WHERE origin = ?", (f"sticker:{ident}",))
         elif action == "catch_not_rybka":
@@ -548,6 +552,13 @@ class AdminMixin:
             self.conn.execute("""INSERT INTO styles (code, name, num, fin_count, filled, smile, lid, brow, gaze, note, created)
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (*values, time.time()))
 
+    def _revoke_stick_points(self, sticker_id):
+        """Autor přijde o body, které dostal za nalepení rybky (jen jednou)."""
+        s = self.conn.execute("SELECT author_id, stick_points FROM stickers WHERE id = ?", (sticker_id,)).fetchone()
+        if s and s["stick_points"]:
+            self.conn.execute("UPDATE users SET points = points - ? WHERE id = ?", (s["stick_points"], s["author_id"]))
+            self.conn.execute("UPDATE stickers SET stick_points = 0 WHERE id = ?", (sticker_id,))
+
     def _delete_sticker(self, sticker_id):
         """Smaže rybku úplně: lovci i autor přijdou o body za její úlovky, zmizí úlovky, fotky
         i její vzory v galerii. Vzory označené „není rybka“ zůstanou, ty se hodí dál."""
@@ -556,6 +567,7 @@ class AdminMixin:
         if not s:
             raise AdminError(404, "Samolepka neexistuje")
         images = [s["image"]]
+        self._revoke_stick_points(sticker_id)
         for c in conn.execute("SELECT * FROM catches WHERE sticker_id = ?", (sticker_id,)).fetchall():
             if c["accepted"]:
                 points = c["points"] if c["points"] is not None else _config["catch_points"](s["env"], s["rarity"])

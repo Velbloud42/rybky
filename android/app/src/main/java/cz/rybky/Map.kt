@@ -9,6 +9,15 @@ import android.graphics.Path
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -73,8 +82,78 @@ import kotlin.math.log2
 import kotlin.math.sinh
 import kotlin.math.tan
 
+fun setupOsmdroid(context: Context) {
+    Configuration.getInstance().apply {
+        userAgentValue = context.packageName
+        osmdroidBasePath = File(context.cacheDir, "osmdroid")
+        osmdroidTileCache = File(context.cacheDir, "osmdroid/tiles")
+    }
+}
+
+/**
+ * Výběr přesného místa: mapa přes celou obrazovku a špendlík uprostřed. Mapou se posouvá tak,
+ * aby špendlík seděl přesně tam, kde rybka visí.
+ */
+@Composable
+fun PinPicker(start: GeoPoint, onCancel: () -> Unit, onPick: (GeoPoint) -> Unit) {
+    val context = LocalContext.current
+    val mapView = remember {
+        setupOsmdroid(context)
+        MapView(context).apply {
+            setTileSource(MAPY_TILES)
+            setMultiTouchControls(true)
+            isTilesScaledToDpi = true
+            zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+            maxZoomLevel = 19.0
+            isHorizontalMapRepetitionEnabled = false
+            isVerticalMapRepetitionEnabled = false
+            controller.setZoom(18.0)
+            controller.setCenter(start)
+        }
+    }
+    DisposableEffect(Unit) {
+        mapView.onResume()
+        onDispose { mapView.onPause(); mapView.onDetach() }
+    }
+    Dialog(onDismissRequest = onCancel, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
+            // Špička špendlíku je přesně uprostřed mapy.
+            Icon(
+                Icons.Filled.Place, null, tint = Amber,
+                modifier = Modifier.align(Alignment.Center).size(48.dp).offset(y = (-24).dp),
+            )
+            Text(
+                "Posuň mapu, aby špendlík seděl přesně tam, kde rybka visí",
+                color = Color.White, fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(16.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+            Row(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding().padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onCancel, modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.Black.copy(alpha = 0.6f), contentColor = Color.White),
+                ) { Text("Zrušit") }
+                Button(onClick = {
+                    val c = mapView.mapCenter
+                    onPick(GeoPoint(c.latitude, c.longitude))
+                }, modifier = Modifier.weight(2f)) { Text("Tady visí") }
+            }
+            Text(
+                "© Mapy.com", fontSize = 11.sp, color = Color(0xFF1B1B1B),
+                modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(top = 80.dp, start = 12.dp)
+                    .background(Color.White.copy(alpha = 0.8f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+        }
+    }
+}
+
 /** Turistická mapa z Mapy.com (podklady ve 2× rozlišení kvůli ostrosti). */
-private val MAPY_TILES = object : OnlineTileSourceBase(
+val MAPY_TILES = object : OnlineTileSourceBase(
     "MapyCom", 0, 19, 256, "", arrayOf("https://api.mapy.com/v1/maptiles/outdoor/256@2x/"),
 ) {
     override fun getTileURLString(index: Long) =
@@ -94,11 +173,7 @@ fun MapScreen(api: Api) {
     var reload by remember { mutableIntStateOf(0) }
 
     val mapView = remember {
-        Configuration.getInstance().apply {
-            userAgentValue = context.packageName
-            osmdroidBasePath = File(context.cacheDir, "osmdroid")
-            osmdroidTileCache = File(context.cacheDir, "osmdroid/tiles")
-        }
+        setupOsmdroid(context)
         MapView(context).apply {
             setTileSource(MAPY_TILES)
             setMultiTouchControls(true)

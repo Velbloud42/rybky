@@ -73,6 +73,8 @@ RARITY_WEIGHT = {"běžná": 60, "nevšední": 25, "vzácná": 12, "legendární
 RARITY_POINTS = {"běžná": 10, "nevšední": 20, "vzácná": 40, "legendární": 100}
 RARITIES = list(RARITY_POINTS)
 AUTHOR_POINTS = 5
+# Kdo nalepí vzácnější rybku, dostane body hned: od nevšední +20 za každý stupeň (předměty nic).
+STICK_POINTS = {"běžná": 0, "nevšední": 20, "vzácná": 40, "legendární": 60}
 # Rybka na hrnku nebo tričku je drobnost: za úlovek jen půl bodu, autor nedostane nic.
 OBJECT_POINTS = 0.5
 
@@ -266,7 +268,8 @@ def init_db():
         add_column(conn, "styles", "gaze", "TEXT")
         # Titulní fotka rybky v adminu: ze všech jejích fotek ta, která se nejvíc shoduje s ostatními
         # („sticker:ID“ nebo „catch:ID“). NULL = spočítat znovu (přibyl nebo ubyl vzorek).
-        add_column(conn, "stickers", "cover", "TEXT")  # JSON: otisky okolí (originál + úlovky)
+        add_column(conn, "stickers", "cover", "TEXT")
+        add_column(conn, "stickers", "stick_points", "REAL")  # kolik dostal autor za nalepení (kvůli vrácení)  # JSON: otisky okolí (originál + úlovky)
         add_column(conn, "catches", "context", "TEXT")   # co úlovek přidal do okolí samolepky (kvůli odebrání)
         add_column(conn, "catches", "inliers", "INTEGER")  # u tetování: kolik bodů kresby sedělo
         # Admin může fotku úlovku vyřadit ze vzorů rybky (třeba když to byla jiná rybka).
@@ -548,8 +551,17 @@ def recognized_tattoo(scores):
     return scores[0][1] if scores[0][0] >= TATTOO_RATIO * second else None
 
 
+def describe(row):
+    """Rybka pro hlášky: jméno, druh a vzácnost, např. „Toulavý Emil (Kérková rybka, běžná)“."""
+    return f"{row['fish_name']} ({row['fish']}, {row['rarity']})"
+
+
 def catch_points(env, rarity):
     return OBJECT_POINTS if env == OBJECT else RARITY_POINTS[rarity]
+
+
+def stick_points(env, rarity):
+    return 0 if env == OBJECT else STICK_POINTS[rarity]
 
 
 def author_points(env):
@@ -1216,12 +1228,15 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             (sid, u["id"], name, fish, new_fish_name(self.conn), rarity, env, hint, lat, lon, acc,
              json.dumps([rounded(e) for e in embeddings]), json.dumps([rounded(e) for e in context]), image, style, now, now),
         )
+        bonus = stick_points(env, rarity)
+        self.conn.execute("UPDATE stickers SET stick_points = ? WHERE id = ?", (bonus, sid))
+        self.conn.execute("UPDATE users SET points = points + ? WHERE id = ?", (bonus, u["id"]))
         for e in embeddings:
             add_ref(self.conn, e, "sticker", f"sticker:{sid}")
-        # Kolik dostane lovec a kolik autor za každý úlovek – ukáže se hned po nalepení.
+        # Kolik autor dostal za nalepení a kolik dostane lovec a autor za každý úlovek – ukáže se hned.
         return {**sticker_json(self.conn.execute("SELECT * FROM stickers WHERE id = ?", (sid,)).fetchone()),
                 "catchPoints": catch_points(env, rarity), "catchPointsText": fmt_points(catch_points(env, rarity)),
-                "authorPoints": author_points(env)}
+                "authorPoints": author_points(env), "stickPoints": bonus, "stickPointsText": fmt_points(bonus)}
 
     def nearby(self):
         """Otisky samolepek v okolí a všech tetování a předmětů pro rozpoznávání v kameře. Polohu neprozrazuje.
@@ -1301,8 +1316,9 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                         "message": "Tohle tetování nepoznávám. Vyfoť ho zblízka a ostře, ať je vidět celá kresba."}
             row, sid, inliers = found, found["id"], scores[0][0]
         if row["author_id"] == u["id"]:
+            what = {TATTOO: "tvoje tetování", OBJECT: "tvůj předmět"}.get(row["env"], "tvoje samolepka")
             return {"result": "own", "sticker": sticker_json(row),
-                    "message": "Tohle je tvoje tetování." if row["env"] == TATTOO else "Tohle je tvoje samolepka."}
+                    "message": f"Tohle je {what} „{row['name']}“ – rybka {describe(row)}. Vlastní ulovit nejde."}
         if row["status"] != "active":
             raise ApiError(409, "Tahle samolepka už tu není")
         portable = row["env"] in PORTABLE
@@ -1353,7 +1369,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         ).lastrowid
         base = {"sticker": sticker_json(row), "author": row["author"]}
         if already:
-            return {**base, "result": "already", "message": "Tuhle rybu už máš v akváriu."}
+            return {**base, "result": "already", "message": f"Tohle je {describe(row)} – tu už máš v akváriu."}
         if not near:
             return {**base, "result": "too_far",
                     "message": "Tahle samolepka visí jinde. Jdi blíž, nebo ji někdo přesunul."}

@@ -1,6 +1,8 @@
 package cz.rybky
 
 import android.graphics.Bitmap
+import org.osmdroid.util.GeoPoint
+import androidx.compose.material.icons.outlined.Map
 import kotlin.math.sin
 import kotlin.math.cos
 import kotlin.math.abs
@@ -224,6 +226,7 @@ fun TeachScreen(api: Api, embedder: Embedder) {
             val name = sticker.getString("name")
             val catchPoints = sticker.optString("catchPointsText").ifEmpty { "?" }
             val authorPoints = sticker.optInt("authorPoints")
+            val stickPoints = sticker.optDouble("stickPoints", 0.0)
             Text(
                 when (sticker.optString("env")) {
                     TATTOO -> "Tetování „$name“ je ve hře!"
@@ -238,9 +241,9 @@ fun TeachScreen(api: Api, embedder: Embedder) {
                 fish = sticker.getString("fish"),
                 rarity = sticker.getString("rarity"),
                 envName = sticker.optString("envName").ifEmpty { null },
-                points = "$catchPoints b. za úlovek",
+                points = if (stickPoints > 0) "+${formatPoints(stickPoints)} b. za nalepení" else "$catchPoints b. za úlovek",
                 details = "Kdo ji uloví, dostane $catchPoints b." +
-                    if (authorPoints > 0) " a ty pokaždé $authorPoints b." else " Za předmět autor body nedostává.",
+                    if (authorPoints > 0) " A ty pokaždé $authorPoints b." else " Za předmět autor body nedostává.",
             )
             Spacer(Modifier.height(24.dp))
             Button(onClick = { form.clear(); shot = null; done = null }) { Text("Nalepit další") }
@@ -329,6 +332,9 @@ fun TeachScreen(api: Api, embedder: Embedder) {
     }
 }
 
+/** Přesnost polohy, kterou uživatel ukázal špendlíkem na mapě (m). */
+private const val PIN_ACCURACY_M = 3f
+
 /** Co uživatel vyplnil – drží se i při přefocení. */
 private class StickerForm {
     var name by mutableStateOf("")
@@ -350,6 +356,9 @@ private fun StickerSheet(
     var fix by remember { mutableStateOf<Fix?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Místo upřesněné špendlíkem na mapě (má přednost před GPS).
+    var pinned by remember { mutableStateOf<Fix?>(null) }
+    var picking by remember { mutableStateOf(false) }
     val manualFix = parseCoords(form.coords)
     val tattoo = form.env == TATTOO
     val portable = isPortable(form.env)
@@ -438,11 +447,29 @@ private fun StickerSheet(
                 Icon(Icons.Outlined.Place, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    fix?.let { "Poloha zjištěna, přesnost ±${it.accuracy.toInt()} m" } ?: "Zjišťuju polohu…",
+                    when {
+                        pinned != null -> "Poloha upřesněná na mapě"
+                        fix != null -> "Poloha zjištěna, přesnost ±${fix!!.accuracy.toInt()} m"
+                        else -> "Zjišťuju polohu…"
+                    },
                     fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (!portable) TextButton(onClick = { picking = true }) {
+                Icon(Icons.Outlined.Map, null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (pinned != null || (shot.fromGallery && manualFix != null)) "Upravit místo na mapě" else "Upřesnit na mapě")
+            }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            if (picking) {
+                val start = (manualFix.takeIf { shot.fromGallery } ?: pinned ?: fix)?.let { GeoPoint(it.lat, it.lon) }
+                    ?: GeoPoint(49.8, 15.5)
+                PinPicker(start, onCancel = { picking = false }) { point ->
+                    picking = false
+                    if (shot.fromGallery) form.coords = "%.6f, %.6f".format(Locale.US, point.latitude, point.longitude)
+                    else pinned = Fix(point.latitude, point.longitude, PIN_ACCURACY_M)
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = onRetake, Modifier.weight(1f).height(52.dp)) {
                     Text(if (shot.fromGallery) "Jiná fotka" else "Přefotit")
@@ -456,6 +483,7 @@ private fun StickerSheet(
                                 val f = when {
                                     portable -> null
                                     shot.fromGallery -> manualFix!!
+                                    pinned != null -> pinned!!
                                     else -> currentFix(context).also { fix = it }
                                 }
                                 val photo = withContext(Dispatchers.Default) { shot.image.jpegBase64() }
