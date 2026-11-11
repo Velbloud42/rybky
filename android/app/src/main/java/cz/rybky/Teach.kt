@@ -363,6 +363,15 @@ private fun StickerSheet(
     val tattoo = form.env == TATTOO
     val portable = isPortable(form.env)
     val recognized = rybka.recognizes(shot.rybka)
+    // Fotku hned ukáže serveru: ten rozhoduje, jestli kresbu pozná (kontrola v telefonu je jen odhad).
+    var photo by remember { mutableStateOf<String?>(null) }
+    var verdict by remember { mutableStateOf<JSONObject?>(null) }
+    LaunchedEffect(shot) {
+        verdict = null
+        val jpeg = withContext(Dispatchers.Default) { shot.image.jpegBase64() }
+        photo = jpeg
+        verdict = runCatching { api.recognize(jpeg) }.getOrNull() ?: JSONObject().put("checked", false)
+    }
 
     LaunchedEffect(Unit) {
         runCatching { api.environments().objects() }.onSuccess { envs = it }.onFailure { error = it.message }
@@ -381,12 +390,22 @@ private fun StickerSheet(
                 when (form.env) { TATTOO -> "Nové tetování"; OBJECT -> "Nový předmět s rybkou"; else -> "Nová rybka" },
                 fontSize = 24.sp, fontWeight = FontWeight.Bold,
             )
-            if (!recognized) Text(
-                "Na fotce nevidím rybku z Rybek" + (shot.rybka?.let { " (shoda ${(it.first * 100).toInt()} %)" } ?: "") +
-                    (if (onEdit != null) ". Přibliž ji ve výřezu" else ". Vyfoť ji zblízka") +
-                    " – nebo to zkus nalepit, rozhodne server.",
-                color = MaterialTheme.colorScheme.error,
-            )
+            val v = verdict
+            when {
+                v == null -> Text("Ověřuju fotku…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                v.optBoolean("checked") && v.optBoolean("fish") ->
+                    Text("Rybku poznávám ✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                v.optBoolean("checked") -> Text(
+                    if (tattoo) "Tuhle kresbu ještě neznám – u nového tetování je to v pořádku."
+                    else "Kresbu rybky na fotce nepoznávám." +
+                        (if (onEdit != null) " Přibliž ji ve výřezu, ať je rybka velká a ostrá." else " Vyfoť ji zblízka."),
+                    color = if (tattoo) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                )
+                !recognized -> Text(
+                    "Rybku na fotce nevidím jistě – zkus ji nalepit, rozhodne server.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (onEdit != null) Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(
                     shot.image.asImageBitmap(), null,
@@ -461,6 +480,16 @@ private fun StickerSheet(
                 Text(if (pinned != null || (shot.fromGallery && manualFix != null)) "Upravit místo na mapě" else "Upřesnit na mapě")
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            // Proč je Nalepit šedé: co ještě chybí.
+            val missing = listOfNotNull(
+                "vyber, kde samolepka visí".takeIf { form.env == null },
+                (if (tattoo) "napiš jméno osoby" else "napiš název").takeIf { form.name.trim().length < 2 },
+                "zadej souřadnice nebo místo ukaž na mapě".takeIf { !portable && shot.fromGallery && manualFix == null },
+            )
+            if (missing.isNotEmpty()) Text(
+                "Ještě: " + missing.joinToString(", "),
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (picking) {
                 val start = (manualFix.takeIf { shot.fromGallery } ?: pinned ?: fix)?.let { GeoPoint(it.lat, it.lon) }
                     ?: GeoPoint(49.8, 15.5)
@@ -486,8 +515,8 @@ private fun StickerSheet(
                                     pinned != null -> pinned!!
                                     else -> currentFix(context).also { fix = it }
                                 }
-                                val photo = withContext(Dispatchers.Default) { shot.image.jpegBase64() }
-                                api.createSticker(form.name.trim(), form.env!!, form.hint, f, shot.embeddings, photo)
+                                val jpeg = photo ?: withContext(Dispatchers.Default) { shot.image.jpegBase64() }
+                                api.createSticker(form.name.trim(), form.env!!, form.hint, f, shot.embeddings, jpeg)
                             }.onSuccess(onDone).onFailure { error = it.message }
                             busy = false
                         }

@@ -246,6 +246,20 @@ def init_db():
                 note TEXT,
                 created REAL NOT NULL
             );
+            -- Vzorové fotky stylů nahrané v adminu (kromě fotek rybek daného stylu).
+            CREATE TABLE IF NOT EXISTS style_images (
+                id INTEGER PRIMARY KEY,
+                style_id INTEGER NOT NULL REFERENCES styles(id) ON DELETE CASCADE,
+                image TEXT NOT NULL,
+                created REAL NOT NULL
+            );
+            -- Paleta barev samolepek (kresba a podklad). Do kódu stylu se nepropisuje, jen rozliší stejné kresby.
+            CREATE TABLE IF NOT EXISTS palette (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                hex TEXT NOT NULL,
+                created REAL NOT NULL
+            );
             -- Ruční úpravy bodů v adminu: kdo, kolik, kdy a proč.
             CREATE TABLE IF NOT EXISTS point_adjustments (
                 id INTEGER PRIMARY KEY,
@@ -266,6 +280,8 @@ def init_db():
         for column in ("num", "fin_count", "filled", "smile", "lid", "brow"):
             add_column(conn, "styles", column, "INTEGER")
         add_column(conn, "styles", "gaze", "TEXT")
+        add_column(conn, "styles", "ink_color", "INTEGER REFERENCES palette(id) ON DELETE SET NULL")
+        add_column(conn, "styles", "base_color", "INTEGER REFERENCES palette(id) ON DELETE SET NULL")
         # Titulní fotka rybky v adminu: ze všech jejích fotek ta, která se nejvíc shoduje s ostatními
         # („sticker:ID“ nebo „catch:ID“). NULL = spočítat znovu (přibyl nebo ubyl vzorek).
         add_column(conn, "stickers", "cover", "TEXT")
@@ -477,26 +493,30 @@ def tattoo_scores(conn, jpeg):
 # a aspoň STYLE_RATIO z nejlepšího stylu (stejná kresba v jiné barvě má podobně bodů).
 STYLE_MIN_INLIERS = 15
 STYLE_RATIO = 0.5
-# Mezi styly se stejnou kresbou rozhodne barva, jen když je rozdíl zřetelný.
-STYLE_COLOR_GAP = 0.15
+# Mezi styly se stejnou kresbou rozhodne barva kresby a podkladu z palety: zůstanou styly, které od
+# nejlépe sedícího nejsou o víc než STYLE_COLOR_GAP horší (vzdálenost barev 0 až 100).
+STYLE_COLOR_GAP = 20
 
 
 def style_photos(conn, skip=None):
-    """Fotky každého stylu: originály a nevyřazené úlovky všech jeho rybek. [skip] = fotka, kterou vynechat."""
+    """Fotky každého stylu: vzory nahrané v adminu, originály a nevyřazené úlovky všech jeho rybek.
+    [skip] = fotka, kterou vynechat."""
     out = {}
+    for r in conn.execute("SELECT style_id, image FROM style_images").fetchall():
+        if r["image"] != skip and (IMAGES_DIR / r["image"]).exists():
+            out.setdefault(r["style_id"], []).append(r["image"])
     for r in conn.execute("SELECT id, style_id FROM stickers WHERE style_id IS NOT NULL").fetchall():
         out.setdefault(r["style_id"], []).extend(f for f in sample_images(conn, r["id"]) if f != skip)
     return out
 
 
 def style_scores(conn, jpeg, skip=None):
-    """Pro každý styl: (shodné body kresby, podobnost barev) s nejlepší jeho fotkou."""
-    query, colors = match.features_of_jpeg(jpeg), match.colors_of_jpeg(jpeg)
+    """Pro každý styl: (shodné body kresby s jeho nejlépe sedící fotkou, ta fotka)."""
+    query = match.features_of_jpeg(jpeg)
     scores = {}
     for style, files in style_photos(conn, skip).items():
         if files:
-            scores[style] = (max(match.inliers(query, match.features_of_file(IMAGES_DIR / f)) for f in files),
-                             max(match.color_similarity(colors, match.colors_of_file(IMAGES_DIR / f)) for f in files))
+            scores[style] = max((match.inliers(query, match.features_of_file(IMAGES_DIR / f)), f) for f in files)
     return scores
 
 
@@ -505,14 +525,55 @@ def plausible_styles(scores):
     return {st for st, (inl, _) in scores.items() if inl >= STYLE_MIN_INLIERS and inl >= top * STYLE_RATIO}
 
 
-def recognize_style(conn, jpeg):
-    """Styl nové rybky z indexu, nebo None (neznámý – zařadí ho admin)."""
-    scores = style_scores(conn, jpeg)
-    styles = plausible_styles(scores)
-    if len(styles) > 1:
-        best = max(scores[st][1] for st in styles)
-        styles = {st for st in styles if scores[st][1] >= best - STYLE_COLOR_GAP}
+def style_colors(conn):
+    """Styl → (barva kresby, barva podkladu) z palety jako hex; jen styly, které mají obě."""
+    return {r["id"]: (r["ink"], r["base"]) for r in conn.execute(
+        """SELECT st.id, i.hex AS ink, b.hex AS base FROM styles st
+           JOIN palette i ON i.id = st.ink_color JOIN palette b ON b.id = st.base_color""")}
+
+
+def measure_colors(conn, jpeg, scores, styles):
+    """Dvě barvy samolepky na fotce (BGR) – kde je kresba, ukáže nejlépe sedící vzor z [styles]."""
+    if not styles or not jpeg:
+        return None
+    reference = max(styles, key=lambda st: scores[st][0])
+    return match.drawing_colors(jpeg, IMAGES_DIR / scores[reference][1])
+
+
+def color_filter(conn, jpeg, scores, styles):
+    """Mezi styly se stejnou kresbou nechá ty, jejichž barvy z palety sedí s fotkou. Styly bez barev nevyřadí."""
+    if len(styles) < 2:
+        return styles
+    colors = style_colors(conn)
+    known = {st for st in styles if st in colors}
+    measured = measure_colors(conn, jpeg, scores, known) if len(known) > 1 else None
+    if measured is None:
+        return styles
+    distance = {st: match.color_distance(*measured, *colors[st]) for st in known}
+    best = min(distance.values())
+    return {st for st in known if distance[st] <= best + STYLE_COLOR_GAP} | (styles - known)
+
+
+def recognize_style(conn, jpeg, scores=None):
+    """Styl nové rybky z indexu, nebo None (neznámý nebo nejednoznačný – zařadí ho admin)."""
+    scores = style_scores(conn, jpeg) if scores is None else scores
+    styles = color_filter(conn, jpeg, scores, plausible_styles(scores))
     return styles.pop() if len(styles) == 1 else None
+
+
+def recognize_for_admin(conn, jpeg):
+    """Pro rozpoznání v adminu: skóre stylů, poznaný styl a naměřené barvy samolepky (hex)."""
+    scores = style_scores(conn, jpeg)
+    plausible = plausible_styles(scores)
+    measured = measure_colors(conn, jpeg, scores, plausible or set(scores))
+    distances = {}
+    if measured:
+        colors = style_colors(conn)
+        distances = {st: round(match.color_distance(*measured, *colors[st])) for st in scores if st in colors}
+    return {"best": recognize_style(conn, jpeg, scores),
+            "styles": [{"id": st, "inliers": inl, "colorDistance": distances.get(st)}
+                       for st, (inl, _) in sorted(scores.items(), key=lambda kv: -kv[1][0])],
+            "colors": [match.bgr_to_hex(c) for c in measured] if measured else []}
 
 
 def identify_fish(conn, jpeg, lat, lon, acc, context, skip=None):
@@ -529,9 +590,9 @@ def identify_fish(conn, jpeg, lat, lon, acc, context, skip=None):
     limit = MAX_DISTANCE_M + min(max(acc or 0, 0), 50)
     candidates = [r for r in rows if r["style_id"] in plausible and (
         r["env"] in PORTABLE or (lat is not None and r["lat"] is not None and distance_m(lat, lon, r["lat"], r["lon"]) <= limit))]
-    if len({r["style_id"] for r in candidates}) > 1:  # různé styly se stejnou kresbou: barva, je-li zřetelná
-        best = max(scores[r["style_id"]][1] for r in candidates)
-        candidates = [r for r in candidates if scores[r["style_id"]][1] >= best - STYLE_COLOR_GAP]
+    if len({r["style_id"] for r in candidates}) > 1:  # různé styly se stejnou kresbou: rozhodne barva
+        kept = color_filter(conn, jpeg, scores, {r["style_id"] for r in candidates})
+        candidates = [r for r in candidates if r["style_id"] in kept]
     if len(candidates) == 1:
         return candidates[0], None, scores[candidates[0]["style_id"]][0]
     if not candidates:
@@ -886,6 +947,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
             ("GET", r"/api/references$", self.references),
             ("POST", r"/api/references/seed$", self.seed_references),
             ("POST", r"/api/stickers$", self.create_sticker),
+            ("POST", r"/api/recognize$", self.recognize),
             ("GET", r"/api/nearby$", self.nearby),
             ("POST", r"/api/scan$", self.scan),
             ("GET", r"/api/map$", self.map),
@@ -1190,8 +1252,12 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         # Styl z indexu (tetování je vždy nový styl). Když ho server pozná, je to určitě rybka z Rybek;
         # jinak rozhodne galerie vzorů a styl pak přiřadí admin.
         jpeg = image_bytes(data) if match.available() else None
-        style = recognize_style(self.conn, jpeg) if jpeg and env != TATTOO else None
-        if style is None and learned_count(self.conn) >= LEARNING_STICKERS and not rybka_check(self.conn, embeddings)[1]:
+        scores = style_scores(self.conn, jpeg) if jpeg and env != TATTOO else {}
+        style = recognize_style(self.conn, jpeg, scores) if scores else None
+        # Kresba z indexu sedí (třeba S2 i S3 se stejnou kresbou, jen barva nerozhodla) = rybka z Rybek;
+        # styl se pak doplní, jen když je jednoznačný, jinak ho zařadí admin.
+        known = bool(plausible_styles(scores))
+        if not known and learned_count(self.conn) >= LEARNING_STICKERS and not rybka_check(self.conn, embeddings)[1]:
             raise ApiError(422, "Na fotce není rybka z Rybek. Vyfoť ji zblízka.")
         # Stejnou rybku nejde přidat dvakrát: když by ji lov poznal jako už existující, je to duplikát.
         # Stejný motiv na jiném místě (nebo jiném předmětu) projde, protože se liší okolím.
@@ -1241,6 +1307,17 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
         return {**sticker_json(self.conn.execute("SELECT * FROM stickers WHERE id = ?", (sid,)).fetchone()),
                 "catchPoints": catch_points(env, rarity), "catchPointsText": fmt_points(catch_points(env, rarity)),
                 "authorPoints": author_points(env), "stickPoints": bonus, "stickPointsText": fmt_points(bonus)}
+
+    def recognize(self):
+        """Než hráč rybku nalepí: pozná server na fotce kresbu z indexu? (Stejná kontrola jako při nalepení.)"""
+        self.user()
+        jpeg = image_bytes(self.body())
+        if not jpeg:
+            raise ApiError(400, "Chybí fotka")
+        if not match.available():
+            return {"checked": False}
+        scores = style_scores(self.conn, jpeg)
+        return {"checked": True, "fish": bool(plausible_styles(scores)), "styled": recognize_style(self.conn, jpeg, scores) is not None}
 
     def nearby(self):
         """Otisky samolepek v okolí a všech tetování a předmětů pro rozpoznávání v kameře. Polohu neprozrazuje.
@@ -1484,7 +1561,9 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     init_db()
     admin.configure(db=db, images_dir=IMAGES_DIR, catch_points=catch_points, author_points=author_points,
-                    new_fish_name=new_fish_name, level_info=level_info)
+                    new_fish_name=new_fish_name, level_info=level_info,
+                    recognize=recognize_for_admin,
+                    image_bytes=image_bytes)
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"Rybky backend běží na http://0.0.0.0:{port}  (databáze {DB_PATH})")
     server.serve_forever()

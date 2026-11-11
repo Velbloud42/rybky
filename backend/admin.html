@@ -144,6 +144,7 @@
   .fish.clickable { cursor: pointer; transition: transform .1s; }
   .fish.clickable:hover { transform: translateY(-2px); }
   dialog#fishDlg:not([open]) { display: none !important; }
+  dialog#recDlg[open] { display: grid; gap: 12px; }
 
   dialog { border: 0; border-radius: 24px; padding: 22px; background: var(--card); color: var(--text); width: min(420px, calc(100vw - 32px));
            box-shadow: 0 20px 60px rgba(0,0,0,.35); }
@@ -172,6 +173,7 @@
 </header>
 <main id="app"><p class="muted">Načítám…</p></main>
 
+<dialog id="recDlg" style="width:min(640px, calc(100vw - 32px))"></dialog>
 <dialog id="fishDlg" style="width:min(820px, calc(100vw - 32px));display:grid;gap:12px"></dialog>
 <dialog id="styleDlg" style="width:min(520px, calc(100vw - 32px))"><form method="dialog" id="styleForm"></form></dialog>
 <dialog id="pointsDlg">
@@ -601,20 +603,41 @@ const LEGEND = `<div class="card" style="display:grid;gap:10px;margin-bottom:16p
   </div></div>`;
 function stylesTab() {
   app.innerHTML = `<div class="toolbar"><span class="muted grow">Každá rybka má styl; vybereš ho u ní v záložce Rybky.</span>
-      <button class="primary" id="newStyle">Nový styl</button></div>${LEGEND}
+      <button id="newStyle">Nový styl</button><button class="primary" id="recognizeStyle">Rozpoznat z fotky</button></div>${LEGEND}
     <div class="grid">${data.styles.map(x => `<div class="fish">
-      <div class="photo">${x.sampleSticker ? `<img loading="lazy" src="/admin/image/sticker/${x.sampleSticker}" alt="">` : 'zatím bez rybky'}</div>
+      <div class="photo">${x.sampleSticker ? `<img loading="lazy" src="/admin/image/sticker/${x.sampleSticker}" alt="">`
+        : x.photos.length ? `<img loading="lazy" src="/admin/image/style/${x.photos[0]}" alt="">` : 'zatím bez fotky'}</div>
       <div class="body">
         <div class="row"><h3 class="grow" style="font-family:ui-monospace,monospace">${esc(x.code)}</h3>
           <span class="muted small">${plural(x.count, 'rybka', 'rybky', 'rybek')}</span></div>
         <div class="small">${esc(decode(x))}</div>
         ${x.note ? `<div class="muted small">${esc(x.note)}</div>` : ''}
+        ${x.inkColor || x.baseColor ? `<div class="small row">${swatch(x.inkColor)} kresba ${swatch(x.baseColor)} podklad</div>` : ''}
+        ${x.photos.length ? `<div class="small"><b>Vzorové fotky</b> (${x.photos.length})</div><div class="row">${x.photos.map(id =>
+          `<span style="position:relative"><a href="/admin/image/style/${id}" target="_blank"><img class="thumb" loading="lazy" src="/admin/image/style/${id}" alt=""></a>
+           <button class="danger" style="position:absolute;top:-6px;right:-6px;padding:0 6px;font-size:12px" data-act="style_photo_delete" data-id="${id}"
+             data-done="Vzorová fotka smazána" data-confirm="Smazat vzorovou fotku stylu ${esc(x.code)}?">×</button></span>`).join('')}</div>` : ''}
         <div class="actions"><button data-edit-style="${x.id}">Upravit</button>
           <button data-show-style="${x.id}">Ukázat rybky</button>
           <button class="danger" data-act="style_delete" data-id="${x.id}" data-done="Styl smazán"
             data-confirm="Smazat styl ${esc(x.code)}? Jeho rybky zůstanou, jen budou nezařazené.">Smazat</button></div>
-      </div></div>`).join('') || '<div class="card empty">Zatím žádné styly.</div>'}</div>`;
+      </div></div>`).join('') || '<div class="card empty">Zatím žádné styly.</div>'}</div>
+    <div class="card" style="margin-top:18px;display:grid;gap:12px">
+      <div class="row"><h2 class="grow" style="margin:0">Paleta barev</h2><button id="newColor">Nová barva</button></div>
+      <p class="muted small" style="margin:0">Barvy samolepek. Do kódu stylu se nepropisují – u stylu vybereš barvu kresby
+        a podkladu a podle nich server rozliší stejné kresby v jiné barvě (třeba hořčicovou a černou).</p>
+      <div class="row" style="gap:10px">${data.palette.map(c => `<div class="chip" style="display:flex;align-items:center;gap:8px">
+        <span style="width:22px;height:22px;border-radius:50%;background:${esc(c.hex)};border:1px solid var(--line)"></span>
+        <b>${esc(c.name)}</b><span class="muted small">${esc(c.hex)} · ${plural(c.used, 'styl', 'styly', 'stylů')}</span>
+        <button class="ghost" data-edit-color="${c.id}" style="padding:2px 8px">Upravit</button>
+        <button class="ghost danger" data-act="palette_delete" data-id="${c.id}" data-done="Barva smazána"
+          data-confirm="Smazat barvu ${esc(c.name)}? Styly, které ji používají, ji ztratí." style="padding:2px 8px">×</button></div>`).join('')
+        || '<span class="muted">Zatím žádné barvy.</span>'}</div>
+    </div>`;
   document.getElementById('newStyle').onclick = () => openStyle(null);
+  document.getElementById('newColor').onclick = () => openColor(null);
+  app.querySelectorAll('[data-edit-color]').forEach(b => b.onclick = () => openColor(data.palette.find(c => String(c.id) === b.dataset.editColor)));
+  document.getElementById('recognizeStyle').onclick = openRecognize;
   app.querySelectorAll('[data-edit-style]').forEach(b => b.onclick = () => openStyle(data.styles.find(x => String(x.id) === b.dataset.editStyle)));
   app.querySelectorAll('[data-show-style]').forEach(b => b.onclick = () => {
     state.tab = 'rybky'; state.fish.style = b.dataset.showStyle; save(); render();
@@ -623,7 +646,7 @@ function stylesTab() {
 }
 
 const styleDlg = document.getElementById('styleDlg');
-function openStyle(x) {
+function openStyle(x, onSaved) {
   const v = x || {num: Math.max(0, ...data.styles.map(s => s.num || 0)) + 1, fins: 3, filled: 0, smile: 0, lid: 0, brow: 0, gaze: 'C'};
   const form = document.getElementById('styleForm');
   form.innerHTML = `<h2>${x ? 'Upravit styl' : 'Nový styl'}</h2>
@@ -642,10 +665,13 @@ function openStyle(x) {
       <select name="gaze">${Object.entries(GAZE).map(([k, n]) => `<option value="${k}" ${v.gaze === k ? 'selected' : ''}>${k} – kouká ${n}</option>`).join('')}</select>
     </div></div>
     <input name="note" placeholder="Poznámka – podoba samolepky (černý ovál, bílá kresba…)" value="${esc(v.note || '')}">
+    <div class="row" style="flex-wrap:nowrap"><label class="small grow">Barva kresby<br>${colorSelect('ink_color', v.inkColor)}</label>
+      <label class="small grow">Barva podkladu<br>${colorSelect('base_color', v.baseColor)}</label></div>
     <div class="error" id="styleErr"></div>
     <div class="dlg-actions"><button type="button" class="ghost" id="styleCancel">Zrušit</button><button class="primary">Uložit</button></div>`;
   const values = () => { const fd = new FormData(form); return {num: +fd.get('num'), fins: +fd.get('fins'), filled: fd.get('filled') === '1',
-    smile: +fd.get('smile'), lid: fd.has('lid'), brow: fd.has('brow'), gaze: fd.get('gaze'), note: fd.get('note')}; };
+    smile: +fd.get('smile'), lid: fd.has('lid'), brow: fd.has('brow'), gaze: fd.get('gaze'), note: fd.get('note'),
+    ink_color: fd.get('ink_color'), base_color: fd.get('base_color')}; };
   const preview = () => { const w = values(); document.getElementById('codePreview').textContent = codeOf(w);
     document.getElementById('smileVal').textContent = smileText(w.smile); };
   form.oninput = preview; preview();
@@ -653,11 +679,116 @@ function openStyle(x) {
   form.onsubmit = async e => {
     e.preventDefault();
     try {
-      await api('action', {action: 'style_save', id: x?.id, ...values()});
+      const saved = await api('action', {action: 'style_save', id: x?.id, ...values()});
+      if (onSaved) await onSaved(saved.id);
       styleDlg.close(); await refresh(); toast('Styl uložen');
     } catch (err) { document.getElementById('styleErr').textContent = err.message; }
   };
   styleDlg.showModal();
+}
+
+// Rozpoznání stylu z nahrané fotky: server porovná kresbu a barvu se všemi styly, fotku pak jde
+// uložit jako vzor poznaného (nebo vybraného) stylu, nebo z ní založit nový styl.
+const swatch = id => { const c = data.palette.find(p => p.id === id);
+  return c ? `<span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${esc(c.hex)};border:1px solid var(--line);vertical-align:middle" title="${esc(c.name)}"></span> ${esc(c.name)}` : '—'; };
+const colorSelect = (name, value) => `<select name="${name}" style="width:100%"><option value="">—</option>${data.palette.map(c =>
+  `<option value="${c.id}" ${c.id === value ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
+/** Nejbližší barva z palety (jen pro popis naměřené barvy). */
+function nearestColor(hex) {
+  const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const [r, g, b] = rgb(hex);
+  const best = data.palette.map(c => { const [r2, g2, b2] = rgb(c.hex); return [(r - r2) ** 2 + (g - g2) ** 2 + (b - b2) ** 2, c.name]; })
+    .sort((a, b) => a[0] - b[0])[0];
+  return best ? `≈ ${best[1]}` : hex;
+}
+function openColor(c) {
+  const form = document.getElementById('styleForm');
+  form.innerHTML = `<h2>${c ? 'Upravit barvu' : 'Nová barva'}</h2>
+    <div class="row" style="flex-wrap:nowrap"><input name="hex" type="color" value="${esc(c?.hex || '#d4a020')}" style="width:64px;height:44px;padding:2px">
+      <input name="name" placeholder="Název (hořčicová)" value="${esc(c?.name || '')}" maxlength="30" style="flex:1"></div>
+    <div class="error" id="styleErr"></div>
+    <div class="dlg-actions"><button type="button" class="ghost" id="styleCancel">Zrušit</button><button class="primary">Uložit</button></div>`;
+  document.getElementById('styleCancel').onclick = () => styleDlg.close();
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try { await api('action', {action: 'palette_save', id: c?.id, name: fd.get('name'), hex: fd.get('hex')});
+          styleDlg.close(); await refresh(); toast('Barva uložena'); }
+    catch (err) { document.getElementById('styleErr').textContent = err.message; }
+  };
+  form.oninput = null;
+  styleDlg.showModal();
+}
+
+const recDlg = document.getElementById('recDlg');
+let recPhoto = null;
+function openRecognize() {
+  recPhoto = null;
+  recDlg.innerHTML = `<div class="row"><h2 class="grow" style="margin:0">Rozpoznat styl z fotky</h2><button class="ghost" id="recClose">Zavřít</button></div>
+    <p class="muted small" style="margin:0">Nahraj fotku rybky (samolepky) – nejlépe zblízka a ostře, rybka uprostřed.</p>
+    <input type="file" id="recFile" accept="image/*">
+    <div id="recBody"></div>`;
+  document.getElementById('recClose').onclick = () => recDlg.close();
+  document.getElementById('recFile').onchange = e => e.target.files[0] && recognize(e.target.files[0]);
+  recDlg.showModal();
+}
+/** Fotka zmenšená na nejvýš 1280 px jako JPEG v base64 (server bere do 1,5 MB). */
+function shrink(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = Object.assign(document.createElement('canvas'), {width: Math.round(img.width * k), height: Math.round(img.height * k)});
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.88));
+    };
+    img.onerror = () => reject(new Error('Tohle není obrázek'));
+    // Přes data: adresu – blob: adresy zakazuje bezpečnostní politika stránky.
+    const reader = new FileReader();
+    reader.onload = () => { img.src = reader.result; };
+    reader.onerror = () => reject(new Error('Fotku nejde načíst'));
+    reader.readAsDataURL(file);
+  });
+}
+async function recognize(file) {
+  const body = document.getElementById('recBody');
+  body.innerHTML = '<p class="muted">Poznávám…</p>';
+  try {
+    const url = await shrink(file);
+    recPhoto = url.split(',')[1];
+    const res = await api('recognize', {image: recPhoto});
+    const top = res.styles.filter(r => r.inliers > 0).slice(0, 5);
+    const best = data.styles.find(x => x.id === res.best);
+    const pick = res.best ?? top[0]?.id;
+    body.innerHTML = `<div class="row" style="align-items:flex-start;flex-wrap:nowrap">
+        <img src="${url}" alt="" style="width:160px;height:160px;object-fit:cover;border-radius:14px;flex:none">
+        <div class="grow" style="display:grid;gap:6px;min-width:0">
+          ${res.colors.length ? `<div class="small row">Barvy samolepky na fotce: ${res.colors.map(h =>
+            `<span style="display:inline-block;width:20px;height:20px;border-radius:50%;background:${h};border:1px solid var(--line)" title="${h}"></span>`).join(' ')}
+            <span class="muted">${res.colors.map(nearestColor).join(' a ')}</span></div>` : ''}
+          ${best ? `<div><span class="pill ok">poznáno</span> <b style="font-family:ui-monospace,monospace">${esc(best.code)}</b>
+              <span class="muted small">${esc(best.note || '')}</span></div>`
+            : '<div><span class="pill warn">styl nepoznán</span> <span class="muted small">Vyber ho ručně, nebo založ nový.</span></div>'}
+          ${top.length ? top.map(r => { const x = data.styles.find(s => s.id === r.id);
+            return `<label class="chip" style="justify-content:flex-start"><input type="radio" name="recStyle" value="${r.id}" ${r.id === pick ? 'checked' : ''}>
+              <b style="font-family:ui-monospace,monospace">${esc(x?.code || '?')}</b>
+              <span class="muted small">${r.inliers} b. kresby${r.colorDistance != null ? ` · barvy ${100 - r.colorDistance} %` : ''}</span></label>`; }).join('')
+            : '<div class="muted small">S žádným stylem se kresba neshoduje.</div>'}
+          <div class="row"><select id="recOther" style="flex:1;min-width:0"><option value="">…nebo jiný styl</option>
+            ${data.styles.map(x => `<option value="${x.id}">${esc(x.code)}${x.note ? ` – ${esc(x.note)}` : ''}</option>`).join('')}</select></div>
+        </div></div>
+      <div class="dlg-actions"><button id="recNew">Nový styl z fotky</button><button class="primary" id="recSave">Uložit fotku ke stylu</button></div>`;
+    document.getElementById('recOther').onchange = () => recDlg.querySelectorAll('[name=recStyle]').forEach(r => r.checked = false);
+    document.getElementById('recSave').onclick = async () => {
+      const style = document.getElementById('recOther').value || recDlg.querySelector('[name=recStyle]:checked')?.value;
+      if (!style) return toast('Vyber styl', true);
+      try { await api('action', {action: 'style_photo_add', style, image: recPhoto}); recDlg.close(); await refresh();
+            toast(`Fotka uložena ke stylu ${data.styles.find(x => String(x.id) === String(style))?.code || ''}`); }
+      catch (err) { toast(err.message, true); }
+    };
+    document.getElementById('recNew').onclick = () => { recDlg.close();
+      openStyle(null, id => api('action', {action: 'style_photo_add', style: id, image: recPhoto})); };
+  } catch (err) { body.innerHTML = `<p class="error">${esc(err.message)}</p>`; }
 }
 
 /** Shoda úlovku: u tetování počet shodných bodů kresby, jinak podobnost okolí. */

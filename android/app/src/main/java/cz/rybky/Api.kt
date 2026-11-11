@@ -48,6 +48,10 @@ class Api(var token: String?) {
     suspend fun map(lat: Double, lon: Double): JSONArray =
         call("GET", "/api/map?lat=$lat&lon=$lon") as JSONArray
 
+    /** Pozná server na fotce kresbu rybky z indexu? Stejná kontrola jako při nalepení. */
+    suspend fun recognize(image: String): JSONObject =
+        call("POST", "/api/recognize", JSONObject().put("image", image)) as JSONObject
+
     suspend fun createSticker(
         name: String, env: String, hint: String, fix: Fix?, embeddings: List<FloatArray>, image: String?,
     ): JSONObject = call(

@@ -48,10 +48,11 @@ _setup = {"code": None, "failures": 0}
 _config = {}
 
 
-def configure(db, images_dir, catch_points, author_points, new_fish_name, level_info):
-    """Volá server při startu. Když ještě není žádný klíč, vygeneruje kód pro registraci prvního."""
+def configure(db, images_dir, catch_points, author_points, new_fish_name, level_info, recognize=None, image_bytes=None):
+    """Volá server při startu. Když ještě není žádný klíč, vygeneruje kód pro registraci prvního.
+    [recognize](conn, jpeg) vrací poznaný styl, skóre stylů a naměřené barvy pro rozpoznání stylu z fotky."""
     _config.update(db=db, images_dir=Path(images_dir), catch_points=catch_points, author_points=author_points,
-                   new_fish_name=new_fish_name, level_info=level_info)
+                   new_fish_name=new_fish_name, level_info=level_info, recognize=recognize, image_bytes=image_bytes)
     if webauthn is None:
         print("Admin: balík webauthn chybí, /admin nepoběží.")
         return
@@ -123,7 +124,8 @@ ROUTES = [
     ("POST", r"/admin/api/logout$", "logout"),
     ("GET", r"/admin/api/overview$", "overview"),
     ("POST", r"/admin/api/action$", "action"),
-    ("GET", r"/admin/image/(catch|sticker|avatar)/(\w+)$", "image"),
+    ("POST", r"/admin/api/recognize$", "recognize"),
+    ("GET", r"/admin/image/(catch|sticker|avatar|style)/(\w+)$", "image"),
 ]
 
 
@@ -353,10 +355,12 @@ class AdminMixin:
                    FROM users u ORDER BY u.points DESC, u.created""")],
             "adjustments": q("""SELECT p.id, p.delta, p.reason, p.time, u.nick FROM point_adjustments p
                                 JOIN users u ON u.id = p.user_id ORDER BY p.time DESC LIMIT 200"""),
-            "styles": [{**st, "gazeName": GAZE.get(st["gaze"], "")} for st in q(
-                """SELECT st.id, st.code, st.num, st.fin_count AS fins, st.filled, st.smile, st.lid, st.brow, st.gaze, st.note, (SELECT COUNT(*) FROM stickers s WHERE s.style_id = st.id) AS count,
+            "styles": [{**st, "gazeName": GAZE.get(st["gaze"], ""), "photos": json.loads(st["photos"] or "[]")} for st in q(
+                """SELECT st.id, st.code, st.num, st.fin_count AS fins, st.filled, st.smile, st.lid, st.brow, st.gaze, st.note,
+                          st.ink_color AS inkColor, st.base_color AS baseColor, (SELECT COUNT(*) FROM stickers s WHERE s.style_id = st.id) AS count,
                           (SELECT s.id FROM stickers s WHERE s.style_id = st.id AND s.image IS NOT NULL
-                           ORDER BY s.created LIMIT 1) AS sampleSticker
+                           ORDER BY s.created LIMIT 1) AS sampleSticker,
+                          (SELECT json_group_array(si.id) FROM style_images si WHERE si.style_id = st.id) AS photos
                    FROM styles st ORDER BY st.num""")],
             "stickers": q("""SELECT s.id, s.name, s.env, s.fish, s.fish_name, s.rarity, s.status, s.hint, s.lat, s.lon, s.created, s.style_id AS styleId,
                                     s.cover,
@@ -381,12 +385,15 @@ class AdminMixin:
                               WHERE r.negative = 1 AND r.origin IS NOT NULL GROUP BY r.origin ORDER BY created DESC"""),
             "refCounts": q("SELECT source, negative, COUNT(*) AS n FROM refs GROUP BY source, negative"),
             "keys": q("SELECT id, name, created FROM admin_keys ORDER BY created"),
+            "palette": q("""SELECT p.id, p.name, p.hex, (SELECT COUNT(*) FROM styles st
+                            WHERE st.ink_color = p.id OR st.base_color = p.id) AS used FROM palette p ORDER BY p.created"""),
             "mapyKey": os.environ.get("MAPY_API_KEY", ""),
         }
 
     def _admin_image(self, kind, ident):
         self._require_session()
-        column, table = {"catch": ("image", "catches"), "sticker": ("image", "stickers"), "avatar": ("avatar", "users")}[kind]
+        column, table = {"catch": ("image", "catches"), "sticker": ("image", "stickers"), "avatar": ("avatar", "users"),
+                         "style": ("image", "style_images")}[kind]
         row = self.conn.execute(f"SELECT {column} AS image FROM {table} WHERE id = ?", (ident,)).fetchone()
         if not row or not row["image"]:
             raise AdminError(404, "Fotka není")
@@ -442,7 +449,35 @@ class AdminMixin:
             conn.execute("INSERT INTO point_adjustments (user_id, delta, reason, time) VALUES (?, ?, ?, ?)",
                          (ident, delta, reason, time.time()))
         elif action == "style_save":
-            self._save_style(data)
+            return {"ok": True, "id": self._save_style(data)}
+        elif action == "palette_save":
+            name = " ".join(str(data.get("name") or "").split())[:30]
+            hexval = str(data.get("hex") or "").lower()
+            if not name or not re.fullmatch(r"#[0-9a-f]{6}", hexval):
+                raise AdminError(400, "Barva potřebuje název a odstín")
+            if data.get("id"):
+                conn.execute("UPDATE palette SET name = ?, hex = ? WHERE id = ?", (name, hexval, data["id"]))
+            else:
+                conn.execute("INSERT INTO palette (name, hex, created) VALUES (?, ?, ?)", (name, hexval, time.time()))
+        elif action == "palette_delete":
+            conn.execute("UPDATE styles SET ink_color = NULL WHERE ink_color = ?", (ident,))
+            conn.execute("UPDATE styles SET base_color = NULL WHERE base_color = ?", (ident,))
+            conn.execute("DELETE FROM palette WHERE id = ?", (ident,))
+        elif action == "style_photo_add":
+            # Fotka z rozpoznávání se uloží jako vzor stylu – podle ní se pak pozná i při lovu.
+            if not conn.execute("SELECT 1 FROM styles WHERE id = ?", (data.get("style"),)).fetchone():
+                raise AdminError(404, "Takový styl není")
+            jpeg = self._photo(data)
+            if not jpeg:
+                raise AdminError(400, "Chybí fotka")
+            name = f"style-{data['style']}-{secrets.token_hex(4)}.jpg"
+            (_config["images_dir"] / name).write_bytes(jpeg)
+            conn.execute("INSERT INTO style_images (style_id, image, created) VALUES (?, ?, ?)", (data["style"], name, time.time()))
+        elif action == "style_photo_delete":
+            row = conn.execute("SELECT image FROM style_images WHERE id = ?", (ident,)).fetchone()
+            if row:
+                (_config["images_dir"] / row["image"]).unlink(missing_ok=True)
+                conn.execute("DELETE FROM style_images WHERE id = ?", (ident,))
         elif action == "style_delete":
             # Rybky stylu zůstanou, jen budou nezařazené.
             conn.execute("UPDATE stickers SET style_id = NULL WHERE style_id = ?", (ident,))
@@ -545,13 +580,34 @@ class AdminMixin:
         taken = self.conn.execute("SELECT id FROM styles WHERE num = ? AND id != ?", (num, data.get("id") or 0)).fetchone()
         if taken:
             raise AdminError(409, f"Číslo S{num} už má jiný styl")
-        values = (code, "", num, fins, filled, smile, lid, brow, gaze, note)
+        color = lambda key: int(data[key]) if str(data.get(key) or "").isdigit() else None  # noqa: E731
+        values = (code, "", num, fins, filled, smile, lid, brow, gaze, note, color("ink_color"), color("base_color"))
         if data.get("id"):
             self.conn.execute("""UPDATE styles SET code = ?, name = ?, num = ?, fin_count = ?, filled = ?, smile = ?, lid = ?,
-                                 brow = ?, gaze = ?, note = ? WHERE id = ?""", (*values, data["id"]))
+                                 brow = ?, gaze = ?, note = ?, ink_color = ?, base_color = ? WHERE id = ?""", (*values, data["id"]))
         else:
-            self.conn.execute("""INSERT INTO styles (code, name, num, fin_count, filled, smile, lid, brow, gaze, note, created)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (*values, time.time()))
+            return self.conn.execute("""INSERT INTO styles (code, name, num, fin_count, filled, smile, lid, brow, gaze, note,
+                                        ink_color, base_color, created)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (*values, time.time())).lastrowid
+        return data["id"]
+
+    @staticmethod
+    def _photo(data):
+        """JPEG z požadavku (base64 v „image“), nebo None."""
+        try:
+            return _config["image_bytes"](data)
+        except Exception:  # noqa: BLE001 – ApiError serveru: neplatný obrázek
+            raise AdminError(400, "Neplatná fotka – nahraj JPEG do 1,5 MB")
+
+    def _admin_recognize(self):
+        """Rozpozná styl z nahrané fotky: všechny styly seřazené podle shody kresby a barvy a tip serveru."""
+        self._require_session()
+        if not _config["recognize"]:
+            raise AdminError(503, "Na serveru chybí OpenCV")
+        jpeg = self._photo(self.body())
+        if not jpeg:
+            raise AdminError(400, "Chybí fotka")
+        return _config["recognize"](self.conn, jpeg)
 
     def _revoke_stick_points(self, sticker_id):
         """Autor přijde o body, které dostal za nalepení rybky (jen jednou)."""
