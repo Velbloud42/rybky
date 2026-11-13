@@ -151,6 +151,8 @@
   dialog::backdrop { background: rgba(5, 10, 20, .55); }
   dialog h2 { display: flex; align-items: center; gap: 10px; }
   dialog form { display: grid; gap: 12px; }
+  dialog form > *, dialog select { min-width: 0; max-width: 100%; }
+  dialog { overflow-x: hidden; }
   dialog input { width: 100%; }
   .preview { background: var(--surface); border-radius: 14px; padding: 10px 12px; }
   .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -173,6 +175,7 @@
 </header>
 <main id="app"><p class="muted">Načítám…</p></main>
 
+<dialog id="grantDlg" style="width:auto;max-width:calc(100vw - 32px)"></dialog>
 <dialog id="recDlg" style="width:min(640px, calc(100vw - 32px))"></dialog>
 <dialog id="fishDlg" style="width:min(820px, calc(100vw - 32px));display:grid;gap:12px"></dialog>
 <dialog id="styleDlg" style="width:min(520px, calc(100vw - 32px))"><form method="dialog" id="styleForm"></form></dialog>
@@ -185,7 +188,7 @@
     </div>
     <input id="pointsValue" type="number" step="0.5" inputmode="decimal" placeholder="např. 10 nebo -5" required>
     <div class="chips" id="pointsQuick"></div>
-    <input id="pointsReason" maxlength="120" placeholder="Důvod (uvidíš ho v záložce Body)">
+    <input id="pointsReason" maxlength="120" placeholder="Důvod (uvidíš ho pod seznamem hráčů)">
     <div class="preview" id="pointsPreview"></div>
     <div class="error" id="pointsErr"></div>
     <div class="dlg-actions">
@@ -221,7 +224,7 @@ const ago = t => {
 };
 const pts = p => (p ?? 0).toLocaleString('cs-CZ', {maximumFractionDigits: 1});
 const plural = (n, one, few, many) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ? few : many}`;
-const ENV = {voda: 'U vody', park: 'Park a příroda', mesto: 'Město', uvnitr: 'Vnitřní prostory', vrchol: 'Vrchol a výška', tetovani: 'Tetování', predmet: 'Předmět'};
+const ENV = {voda: 'U vody', park: 'Park a příroda', mesto: 'Město', uvnitr: 'Vnitřní prostory', vrchol: 'Vrchol a výška', tetovani: 'Tetování', predmet: 'Předmět', pieta: 'Pieta'};
 const PORTABLE = ['tetovani', 'predmet'];
 const kindOf = env => env === 'tetovani' ? 'tattoo' : env === 'predmet' ? 'object' : 'sticker';
 const RARITY = {'běžná': 'common', 'nevšední': 'uncommon', 'vzácná': 'rare', 'legendární': 'legendary'};
@@ -336,7 +339,6 @@ function tabs() {
     ['rybky', 'Rybky', data.stickers.length],
     ['ulovky', 'Úlovky', data.catches.filter(c => c.accepted).length],
     ['styly', 'Index stylů', data.styles.length],
-    ['body', 'Úpravy bodů', data.adjustments.length],
     ['klic', 'Klíč'],
   ];
 }
@@ -347,7 +349,7 @@ function render() {
   tabsEl.innerHTML = tabs().map(([id, label, n]) =>
     `<button data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${label}${n != null ? `<span class="count">${n}</span>` : ''}</button>`).join('');
   tabsEl.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { state.tab = b.dataset.tab; save(); render(); scrollTo(0, 0); });
-  ({prehled: overviewTab, hraci: playersTab, rybky: fishTab, ulovky: catchesTab, styly: stylesTab, body: adjustmentsTab, klic: keyTab})[state.tab]();
+  ({prehled: overviewTab, hraci: playersTab, rybky: fishTab, ulovky: catchesTab, styly: stylesTab, klic: keyTab})[state.tab]();
 }
 
 /** Lišta s hledáním a filtry nad seznamem; při psaní se překreslí jen seznam, ať hledání neztratí fokus. */
@@ -440,10 +442,45 @@ function playersTab() {
       <div class="points"><b>${pts(u.points)}</b><span class="muted small">bodů</span></div>
       <div class="actions">
         <button class="primary" data-points="${u.id}">Upravit body</button>
+        <button data-grant="${u.id}">Přidat úlovek</button>
         ${u.hasPassword ? `<button data-reset="${u.id}">Reset hesla</button>` : ''}
         ${!u.stickers && !u.catches ? `<button class="danger" data-delete-user="${u.id}">Smazat</button>` : ''}
-      </div></div>`).join('')}</div>`;
+      </div></div>`).join('')}</div>
+    <h2 style="margin:24px 0 12px">Úpravy bodů</h2>${adjustmentsTable()}`;
   });
+}
+
+/** Historie ručních úprav bodů (pod seznamem hráčů). */
+const adjustmentsTable = () => data.adjustments.length
+  ? `<div class="table"><table><tr><th>Kdy</th><th>Hráč</th><th class="num">Změna</th><th>Důvod</th></tr>
+    ${data.adjustments.map(a => `<tr><td class="muted small">${when(a.time)}</td><td><b>${esc(a.nick)}</b></td>
+      <td class="num ${a.delta > 0 ? 'plus' : 'minus'}">${a.delta > 0 ? '+' : ''}${pts(a.delta)} b.</td>
+      <td>${esc(a.reason || '')}</td></tr>`).join('')}</table></div>`
+  : '<div class="card empty">Zatím žádné úpravy.</div>';
+
+// Přidání úlovku: rybka, kterou hráč ulovil mimo aplikaci, se mu zapíše jako ulovená.
+const grantDlg = document.getElementById('grantDlg');
+function openGrant(u) {
+  const has = new Set(data.samples.filter(x => x.finder === u.nick).map(x => x.stickerId));
+  const options = data.stickers.filter(st => st.author !== u.nick && !has.has(st.id))
+    .map(st => `<option value="${st.id}">${esc(st.fish_name || st.fish)} – „${esc(st.name || '')}“ (${esc(ENV[st.env] || st.env)}, ${esc(st.rarity)})</option>`).join('');
+  grantDlg.innerHTML = `<form method="dialog" style="display:grid;gap:12px">
+    <h2 style="display:flex;align-items:center;gap:10px">${avatar(u, 'sm')} Úlovek pro ${esc(u.nick)}</h2>
+    ${options ? `<select name="sticker" required style="width:100%;min-width:0;max-width:100%">${options}</select>
+      <label class="chip" style="justify-self:start"><input type="checkbox" name="points" checked> připsat body (lovci i autorovi, jako při lovu)</label>`
+      : '<p class="muted">Hráč už má všechny rybky, které může ulovit.</p>'}
+    <div class="error" id="grantErr"></div>
+    <div class="dlg-actions"><button type="button" class="ghost" id="grantCancel">Zrušit</button>${options ? '<button class="primary">Přidat</button>' : ''}</div></form>`;
+  const form = grantDlg.querySelector('form');
+  document.getElementById('grantCancel').onclick = () => grantDlg.close();
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try { await api('action', {action: 'grant_catch', id: u.id, sticker: fd.get('sticker'), points: fd.has('points')});
+          grantDlg.close(); await refresh(); toast(`Úlovek přidán hráči ${u.nick}`); }
+    catch (err) { document.getElementById('grantErr').textContent = err.message; }
+  };
+  grantDlg.showModal();
 }
 
 // Titulní fotka rybky: ta z jejích fotek, která se nejvíc shoduje s ostatními (vybírá server).
@@ -794,15 +831,6 @@ async function recognize(file) {
 /** Shoda úlovku: u tetování počet shodných bodů kresby, jinak podobnost okolí. */
 const match = c => c.inliers != null ? `${c.inliers} b. kresby` : c.similarity != null ? Math.round(c.similarity * 100) + ' %' : '—';
 
-function adjustmentsTab() {
-  app.innerHTML = `<div class="toolbar"><span class="muted grow">Ruční úpravy bodů. Body hráči upravíš v záložce Hráči.</span></div>` +
-    (data.adjustments.length ? `<div class="table"><table><tr><th>Kdy</th><th>Hráč</th><th class="num">Změna</th><th>Důvod</th></tr>
-      ${data.adjustments.map(a => `<tr><td class="muted small">${when(a.time)}</td><td><b>${esc(a.nick)}</b></td>
-        <td class="num ${a.delta > 0 ? 'plus' : 'minus'}">${a.delta > 0 ? '+' : ''}${pts(a.delta)} b.</td>
-        <td>${esc(a.reason || '')}</td></tr>`).join('')}</table></div>`
-      : '<div class="card empty">Zatím žádné úpravy.</div>');
-}
-
 function keyTab() {
   app.innerHTML = `<div class="card" style="display:grid;gap:12px;max-width:640px">
     <h2 style="margin:0">Hardwarový klíč</h2>
@@ -834,6 +862,7 @@ function bindActions(root) {
     {confirmText: 'Smazat prázdný účet?', done: 'Účet smazán', button: b}));
   root.querySelectorAll('[data-style-of]').forEach(sel => sel.onchange = () =>
     act({action: 'sticker_style', id: sel.dataset.styleOf, style: sel.value || null}, {done: 'Styl uložen'}));
+  root.querySelectorAll('[data-grant]').forEach(b => b.onclick = () => openGrant(data.users.find(u => String(u.id) === b.dataset.grant)));
   root.querySelectorAll('[data-points]').forEach(b => b.onclick = () => openPoints(data.users.find(u => String(u.id) === b.dataset.points)));
 }
 

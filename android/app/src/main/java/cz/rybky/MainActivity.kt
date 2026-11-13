@@ -122,7 +122,12 @@ val ENV_ICONS = mapOf(
     "vrchol" to Icons.Outlined.Landscape,
     "tetovani" to Icons.Outlined.Brush,
     "predmet" to Icons.Outlined.LocalCafe,
+    "pieta" to Icons.Outlined.SetMeal,
 )
+
+/** Pieta: pietní místo – kdo rybku nalepí i kdo ji uloví, dostane PIETA_POINTS (stejně jako na serveru). */
+const val PIETA = "pieta"
+const val PIETA_POINTS = 38
 
 /**
  * Galerie vzorů ze serveru: „takhle vypadá rybka“ (positives) a „tohle rybka není“ (negatives, označuje admin).

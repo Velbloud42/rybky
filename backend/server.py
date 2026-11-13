@@ -86,12 +86,16 @@ ENVIRONMENTS = {
     "vrchol": "Vrchol a výška",
     "tetovani": "Tetování",
     "predmet": "Předmět s rybkou",
+    "pieta": "Pieta",
 }
 # Tetování a předměty (hrnek, tričko, taška…) nemají polohu – nosí se s sebou.
 # Ulovit jdou kdekoli, jen podle obrázku, a nejsou na mapě.
 TATTOO = "tetovani"
 OBJECT = "predmet"
 PORTABLE = {TATTOO, OBJECT}
+# Pieta: pietní místo. Kdo tu rybku nalepí i kdo ji uloví, dostane PIETA_POINTS bez ohledu na vzácnost.
+PIETA = "pieta"
+PIETA_POINTS = 38
 FISH = {
     "voda": [("Kapr", "běžná"), ("Pstruh", "nevšední"), ("Štika", "vzácná"), ("Vyza", "legendární")],
     "park": [("Karas", "běžná"), ("Lín", "nevšední"), ("Úhoř", "vzácná")],
@@ -102,6 +106,7 @@ FISH = {
                  ("Živá legenda", "legendární")],
     "predmet": [("Hrnková rybka", "běžná"), ("Tričková ryba", "běžná"), ("Plechovková sardinka", "nevšední"),
                 ("Klíčenková rybka", "vzácná")],
+    "pieta": [("Pietní rybka", "vzácná")],
 }
 
 # Každá rybka má navíc vlastní jméno, které žádná jiná nemá: přívlastek + jméno („Ospalý Ferda“, „Mlsná Jarmila“).
@@ -618,11 +623,11 @@ def describe(row):
 
 
 def catch_points(env, rarity):
-    return OBJECT_POINTS if env == OBJECT else RARITY_POINTS[rarity]
+    return PIETA_POINTS if env == PIETA else OBJECT_POINTS if env == OBJECT else RARITY_POINTS[rarity]
 
 
 def stick_points(env, rarity):
-    return 0 if env == OBJECT else STICK_POINTS[rarity]
+    return PIETA_POINTS if env == PIETA else 0 if env == OBJECT else STICK_POINTS[rarity]
 
 
 def author_points(env):
@@ -1567,6 +1572,7 @@ class Handler(admin.AdminMixin, BaseHTTPRequestHandler):
                     - math.sin(math.radians(lat)) * math.cos(math.radians(clat)) * math.cos(math.radians(clon - lon)),
                 )) % 360),
                 "envName": ENVIRONMENTS.get(r["env"]),
+                "env": r["env"],
                 "rarity": r["rarity"],
                 "name": r["name"],
                 "fish": r["fish"] if known else None,

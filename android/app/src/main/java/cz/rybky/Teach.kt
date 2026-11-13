@@ -383,42 +383,43 @@ private fun StickerSheet(
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(
-            Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            // Vysoký jen podle obsahu; posouvat se musí, jen když se obsah na displej opravdu nevejde.
+            Modifier.padding(horizontal = 20.dp).padding(bottom = 16.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                when (form.env) { TATTOO -> "Nové tetování"; OBJECT -> "Nový předmět s rybkou"; else -> "Nová rybka" },
-                fontSize = 24.sp, fontWeight = FontWeight.Bold,
-            )
-            val v = verdict
-            when {
-                v == null -> Text("Ověřuju fotku…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                v.optBoolean("checked") && v.optBoolean("fish") ->
-                    Text("Rybku poznávám ✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                v.optBoolean("checked") -> Text(
-                    if (tattoo) "Tuhle kresbu ještě neznám – u nového tetování je to v pořádku."
-                    else "Kresbu rybky na fotce nepoznávám." +
-                        (if (onEdit != null) " Přibliž ji ve výřezu, ať je rybka velká a ostrá." else " Vyfoť ji zblízka."),
-                    color = if (tattoo) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                )
-                !recognized -> Text(
-                    "Rybku na fotce nevidím jistě – zkus ji nalepit, rozhodne server.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (onEdit != null) Row(verticalAlignment = Alignment.CenterVertically) {
+            // Fotka, nadpis a verdikt serveru vedle sebe, ať zabírají jeden řádek.
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(
                     shot.image.asImageBitmap(), null,
-                    Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop,
+                    Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).let { if (onEdit != null) it.clickable(onClick = onEdit) else it },
+                    contentScale = ContentScale.Crop,
                 )
                 Spacer(Modifier.width(12.dp))
-                TextButton(onClick = onEdit) {
-                    Icon(Icons.Outlined.Crop, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Upravit výřez")
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when (form.env) { TATTOO -> "Nové tetování"; OBJECT -> "Nový předmět s rybkou"; else -> "Nová rybka" },
+                        fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                    )
+                    val v = verdict
+                    when {
+                        v == null -> Text("Ověřuju fotku…", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        v.optBoolean("checked") && v.optBoolean("fish") ->
+                            Text("Rybku poznávám ✓", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        v.optBoolean("checked") -> Text(
+                            if (tattoo) "Tuhle kresbu ještě neznám – u nového tetování je to v pořádku."
+                            else "Kresbu rybky nepoznávám." + if (onEdit != null) " Přibliž ji ve výřezu." else " Vyfoť ji zblízka.",
+                            fontSize = 14.sp,
+                            color = if (tattoo) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                        )
+                        !recognized -> Text(
+                            "Rybku nevidím jistě – rozhodne server.",
+                            fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
+                if (onEdit != null) IconButton(onClick = onEdit) { Icon(Icons.Outlined.Crop, "Upravit výřez") }
             }
-            Text("Kde samolepka visí?", fontWeight = FontWeight.Bold)
+            Text("Prostředí", fontWeight = FontWeight.Bold)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 envs.forEach { e ->
                     val id = e.getString("id")
@@ -451,15 +452,17 @@ private fun StickerSheet(
                 label = { Text("Souřadnice") },
                 placeholder = { Text("50.0755, 14.4378") },
                 isError = form.coords.isNotBlank() && manualFix == null,
-                supportingText = { Text("Zkopíruješ je třeba z Mapy.com") },
                 trailingIcon = {
-                    IconButton(onClick = {
-                        scope.launch {
-                            runCatching { currentFix(context) }
-                                .onSuccess { form.coords = "%.6f, %.6f".format(Locale.US, it.lat, it.lon) }
-                                .onFailure { error = it.message }
-                        }
-                    }) { Icon(Icons.Outlined.MyLocation, "Moje poloha") }
+                    Row {
+                        IconButton(onClick = { picking = true }) { Icon(Icons.Outlined.Map, "Ukázat na mapě") }
+                        IconButton(onClick = {
+                            scope.launch {
+                                runCatching { currentFix(context) }
+                                    .onSuccess { form.coords = "%.6f, %.6f".format(Locale.US, it.lat, it.lon) }
+                                    .onFailure { error = it.message }
+                            }
+                        }) { Icon(Icons.Outlined.MyLocation, "Moje poloha") }
+                    }
                 },
                 singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth(),
             ) else Row(verticalAlignment = Alignment.CenterVertically) {
@@ -468,16 +471,16 @@ private fun StickerSheet(
                 Text(
                     when {
                         pinned != null -> "Poloha upřesněná na mapě"
-                        fix != null -> "Poloha zjištěna, přesnost ±${fix!!.accuracy.toInt()} m"
+                        fix != null -> "Poloha ±${fix!!.accuracy.toInt()} m"
                         else -> "Zjišťuju polohu…"
                     },
-                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
                 )
-            }
-            if (!portable) TextButton(onClick = { picking = true }) {
-                Icon(Icons.Outlined.Map, null)
-                Spacer(Modifier.width(8.dp))
-                Text(if (pinned != null || (shot.fromGallery && manualFix != null)) "Upravit místo na mapě" else "Upřesnit na mapě")
+                TextButton(onClick = { picking = true }) {
+                    Icon(Icons.Outlined.Map, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (pinned != null) "Upravit na mapě" else "Upřesnit na mapě")
+                }
             }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             // Proč je Nalepit šedé: co ještě chybí.

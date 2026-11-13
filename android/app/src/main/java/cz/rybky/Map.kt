@@ -5,7 +5,6 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -71,6 +70,7 @@ import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Overlay
+import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.mylocation.GpsMyLocationProvider
 import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 import java.io.File
@@ -168,6 +168,8 @@ fun MapScreen(api: Api) {
     val ownColor = MaterialTheme.colorScheme.primary
     var items by remember { mutableStateOf<List<JSONObject>?>(null) }
     var selected by remember { mutableStateOf<JSONObject?>(null) }
+    // Víc rybek na jedné pietě v jednom bodě: po klepnutí jejich seznam.
+    var group by remember { mutableStateOf<List<JSONObject>?>(null) }
     var fix by remember { mutableStateOf<Fix?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
@@ -236,19 +238,34 @@ fun MapScreen(api: Api) {
     LaunchedEffect(items) {
         mapView.overlays.removeAll(stickerOverlays)
         stickerOverlays.clear()
-        items.orEmpty().forEach { s ->
+        // Rybky jedné piety („Boule 1.“, „Boule 2.“…) jsou jeden bod; ostatní každá svůj.
+        val (pieta, single) = items.orEmpty().partition { it.optString("env") == PIETA }
+        val spots = single.map { listOf(it) } + pieta.groupBy { pietaKey(it) }.values
+        spots.forEach { members ->
+            val s = members.first()
+            val isPieta = s.optString("env") == PIETA
             val color = when {
+                isPieta -> Gold
                 s.getBoolean("own") -> ownColor
                 s.getBoolean("caught") -> Color.Gray
                 else -> Amber
             }
             val center = GeoPoint(s.getDouble("lat"), s.getDouble("lon"))
+            val open = { if (members.size > 1) { group = members; selected = null } else { selected = s; group = null } }
+            // Tolerance: okruh, ve kterém jde rybku ulovit.
+            stickerOverlays += Polygon(mapView).apply {
+                points = Polygon.pointsAsCircle(center, CATCH_RADIUS_M)
+                fillPaint.color = color.copy(alpha = 0.14f).toArgb()
+                outlinePaint.color = color.copy(alpha = 0.55f).toArgb()
+                outlinePaint.strokeWidth = 2f
+                setOnClickListener { _, _, _ -> open(); true }
+            }
             stickerOverlays += Marker(mapView).apply {
                 position = center
-                icon = BitmapDrawable(context.resources, stickerPin(context, color.toArgb()))
-                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                icon = BitmapDrawable(context.resources, fishDot(context, color.toArgb(), if (isPieta) 24 else 14, members.size))
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 setInfoWindow(null)
-                setOnMarkerClickListener { _, _ -> selected = s; true }
+                setOnMarkerClickListener { _, _ -> open(); true }
             }
         }
         // Samolepky pod modrou tečkou polohy.
@@ -258,6 +275,7 @@ fun MapScreen(api: Api) {
 
     fun flyTo(s: JSONObject) {
         selected = s
+        group = null
         jumpTo(mapView, GeoPoint(s.getDouble("lat"), s.getDouble("lon")), 16.0)
     }
 
@@ -300,6 +318,7 @@ fun MapScreen(api: Api) {
                     LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
                 }
                 selected != null -> StickerCard(selected!!) { selected = null }
+                group != null -> PietaCard(group!!, onPick = { selected = it }) { group = null }
                 list.isEmpty() -> Panel { Text("Zatím nikde žádná rybka. Nalep první!") }
                 else -> NearestPanel(list, onPick = ::flyTo, onShowAll = { zoomToAll(mapView, list, fix) })
             }
@@ -336,6 +355,41 @@ private fun NearestPanel(items: List<JSONObject>, onPick: (JSONObject) -> Unit, 
                 Text(formatDistance(s.getInt("distance")), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
+
+/** Víc rybek na jedné pietě: kolik jich tu je a jejich seznam. */
+@Composable
+private fun PietaCard(members: List<JSONObject>, onPick: (JSONObject) -> Unit, onClose: () -> Unit) {
+    Panel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Pieta", color = Gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Text(
+                    "Na tomto místě ${if (members.size in 2..4) "jsou" else "je"} ${members.size} " +
+                        if (members.size in 2..4) "ryby" else "ryb",
+                    fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                )
+            }
+            IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Zavřít") }
+        }
+        members.sortedBy { it.optString("name") }.forEach { s ->
+            Row(
+                Modifier.fillMaxWidth().clickable { onPick(s) }.padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(s.optString("name"), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    when {
+                        s.getBoolean("own") -> "tvoje"
+                        s.getBoolean("caught") -> "ulovená"
+                        else -> "k ulovení"
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
+                )
+            }
+        }
+        Text("Každá je za $PIETA_POINTS bodů.", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -432,32 +486,38 @@ private fun locationDot(context: Context, color: Int): Bitmap {
     }
 }
 
-/** Špendlík samolepky: barevná kapka s bílým okrajem, špičkou dolů. */
-private fun stickerPin(context: Context, color: Int): Bitmap {
+/** Tečka rybky: barevný kruh s bílým okrajem; u bodu s víc rybkami (pieta) jejich počet uprostřed. */
+private fun fishDot(context: Context, color: Int, sizeDp: Int, count: Int): Bitmap {
     val d = context.resources.displayMetrics.density
-    val w = (28 * d).toInt()
-    val h = (38 * d).toInt()
-    return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bitmap ->
+    val size = (sizeDp * d).toInt()
+    return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
         val canvas = Canvas(bitmap)
-        val r = w / 2f
-        fun drop(inset: Float) = Path().apply {
-            addCircle(r, r, r - inset, Path.Direction.CW)
-            moveTo(r - (r - inset) * 0.7f, r + (r - inset) * 0.7f)
-            lineTo(r, h - inset * 1.5f)
-            lineTo(r + (r - inset) * 0.7f, r + (r - inset) * 0.7f)
-            close()
-        }
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val r = size / 2f
         paint.color = 0x44000000
-        canvas.drawPath(drop(0f), paint)
+        canvas.drawCircle(r, r, r, paint)
         paint.color = android.graphics.Color.WHITE
-        canvas.drawPath(drop(1.5f * d), paint)
+        canvas.drawCircle(r, r, r - 1 * d, paint)
         paint.color = color
-        canvas.drawPath(drop(4f * d), paint)
-        paint.color = android.graphics.Color.WHITE
-        canvas.drawCircle(r, r, r * 0.28f, paint)
+        canvas.drawCircle(r, r, r - 3 * d, paint)
+        if (count > 1) {
+            paint.color = android.graphics.Color.BLACK
+            paint.textSize = size * 0.5f
+            paint.textAlign = Paint.Align.CENTER
+            paint.isFakeBoldText = true
+            canvas.drawText("$count", r, r - (paint.descent() + paint.ascent()) / 2, paint)
+        }
     }
 }
+
+/** Pietní rybky jedné piety mají stejný název až na pořadové číslo: „Boule 1.“, „Boule 2.“ → „boule“. */
+private fun pietaKey(s: JSONObject) = s.optString("name").replace(Regex("""\s*\d+\.?\s*$"""), "").trim().lowercase()
+
+/** Pietní místa jsou na mapě zlatá. */
+private val Gold = Color(0xFFD4A72C)
+
+/** Okruh, ve kterém jde rybku ulovit (MAX_DISTANCE_M na serveru). */
+private const val CATCH_RADIUS_M = 50.0
 
 fun compass(bearing: Int) =
     listOf("sever", "severovýchod", "východ", "jihovýchod", "jih", "jihozápad", "západ", "severozápad")[

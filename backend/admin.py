@@ -508,6 +508,21 @@ class AdminMixin:
         elif action == "ref_positive":
             # Fotka označená „není rybka“ přece rybka je – vrátit její otisky mezi vzory rybky.
             conn.execute("UPDATE refs SET negative = 0 WHERE origin = ?", (str(ident),))
+        elif action == "grant_catch":
+            # Hráč rybku ulovil mimo aplikaci: zapsat úlovek, jako by ho ulovil (volitelně i s body).
+            s = conn.execute("SELECT * FROM stickers WHERE id = ?", (str(data.get("sticker") or ""),)).fetchone()
+            if not s or not conn.execute("SELECT 1 FROM users WHERE id = ?", (ident,)).fetchone():
+                raise AdminError(404, "Hráč nebo rybka neexistuje")
+            if s["author_id"] == int(ident):
+                raise AdminError(409, "Vlastní rybku hráč ulovit nemůže")
+            if conn.execute("SELECT 1 FROM catches WHERE sticker_id = ? AND finder_id = ? AND accepted = 1", (s["id"], ident)).fetchone():
+                raise AdminError(409, "Tuhle rybku už hráč má")
+            points = _config["catch_points"](s["env"], s["rarity"]) if data.get("points", True) else 0
+            conn.execute("""INSERT INTO catches (sticker_id, finder_id, accepted, points, excluded, time)
+                            VALUES (?, ?, 1, ?, 1, ?)""", (s["id"], ident, points, time.time()))
+            if points:
+                conn.execute("UPDATE users SET points = points + ? WHERE id = ?", (points, ident))
+                conn.execute("UPDATE users SET points = points + ? WHERE id = ?", (_config["author_points"](s["env"]), s["author_id"]))
         elif action == "catch_wrong_fish":
             self._revoke_catch(int(ident), negative=False)
         elif action in ("sample_exclude", "sample_include"):
